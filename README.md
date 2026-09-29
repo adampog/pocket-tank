@@ -27,7 +27,9 @@ wall clear last explore time day  ->  seek_food urgency 8
 This repo is the complete project: the trained model, the distillation
 pipeline that made it, a PC simulator, and the firmware for a real board.
 Got the board? **[Install it from your browser](https://stratobuilds.com/pocket-tank-installer/)**,
-no toolchain needed.
+no toolchain needed. Got the 2.8-inch **CYD** (ES3C28P) instead? This fork
+runs there too: **[build and flash it](#run-it-on-the-28-cyd)** with one
+script.
 
 ## Contents
 
@@ -39,6 +41,7 @@ no toolchain needed.
 - [Try it: firmware in QEMU](#try-it-firmware-in-qemu)
 - [Install from your browser](#install-from-your-browser)
 - [Run it on real hardware](#run-it-on-real-hardware)
+- [Run it on the 2.8" CYD](#run-it-on-the-28-cyd)
 - [Train your own](#train-your-own)
 - [Layout](#layout)
 - [Documentation](#documentation)
@@ -510,10 +513,45 @@ built or tested here, and they may lag behind this repo:
   [Pull request #10](https://github.com/mediacutlet/pocket-tank/pull/10) has
   the details.
 
-**The 2.8" ESP32-S3 CYD** (ES3C28P: an ILI9341 over SPI, FT6336 touch,
-320 x 240) builds from this tree too, with `tools/build_cyd.sh`; the pages
-are scaled or laid out for its shorter screen. [docs/CYD.md](docs/CYD.md)
-has the board, the build and what the port changed.
+## Run it on the 2.8" CYD
+
+This fork also runs the tank on the **ES3C28P "cheap yellow display"**: an
+ESP32-S3 with 16 MB flash and 8 MB PSRAM, a 320×240 ILI9341 IPS panel over
+SPI, FT6336 touch and ES8311 audio, with every page laid out for the smaller
+screen. The browser installer is for the AMOLED board only; the CYD is built
+and flashed from this tree with ESP-IDF 5.5 (`IDF_PATH`, or
+`~/.espressif/esp-idf/v5.5`):
+
+```bash
+tools/build_cyd.sh                          # build only
+tools/build_cyd.sh <port> --model           # the first flash: the app and the 8 MB model partition
+tools/build_cyd.sh <port>                   # after that: the app alone
+```
+
+`<port>` is the board's stable path,
+`/dev/serial/by-id/usb-Espressif_USB_JTAG_serial_debug_unit_<MAC>-if00`, never
+a `/dev/ttyACM<n>`, whose numbers shuffle between plug-ins. The script keeps
+its own build directory (`firmware/build_cyd`) and sdkconfig
+(`sdkconfig.defaults` with `sdkconfig.defaults.cyd` on top), so the AMOLED
+build is never touched, and it flashes nothing when the build fails.
+
+**Updating keeps the tank**, as on the AMOLED board: the script writes the
+bootloader, the partition table and the app, and the save in NVS is left
+alone. **To start over from a blank board**, erase it and flash the model
+again:
+
+```bash
+. ~/.espressif/esp-idf/v5.5/export.sh       # esptool.py comes with ESP-IDF
+esptool.py --chip esp32s3 -p <port> erase_flash
+tools/build_cyd.sh <port> --model
+```
+
+Back up the factory image before the first flash
+(`esptool.py --chip esp32s3 -p <port> -b 921600 read_flash 0 0x1000000 factory_16MB.bin`)
+and the board goes back to how it arrived with one `write_flash`. In the
+simulator, `make -C sim CYD=1` builds `fishsim-cyd` at the CYD's 320×240.
+[docs/CYD.md](docs/CYD.md) has the board, the pins and everything the port
+changed.
 
 ## Train your own
 

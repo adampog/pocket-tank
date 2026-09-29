@@ -149,7 +149,19 @@ _Static_assert(offsetof(save_t, bubble_x) + sizeof(((save_t *)0)->ms_seen) + siz
  * 1616, 1624, 1640, 1656 - sim/testdata/saves holds them. */
 _Static_assert(SAVE_MAGIC == 0x50544b32u, "SAVE LAYOUT LOCK: a new magic = every saved tank starts fresh");
 _Static_assert(sizeof SAVE_NVS_NS == 5 && sizeof SAVE_NVS_KEY == 5, "SAVE LAYOUT LOCK: the NVS namespace / key are \"tank\" / \"save\"");
-#define SAVE_AT(f, off) _Static_assert(offsetof(save_t, f) == (off), "SAVE LAYOUT LOCK: save_t." #f " moved")
+/* Every offset below is in the AMOLED's numbering. Only the algae grid
+ * follows the tank (28 x 23 = 644 cells at 448 x 368; 20 x 15 = 300 on the
+ * CYD's 320 x 240), so on another board everything past it sits by the
+ * grids' difference: SAVE_OFF moves an offset past the AMOLED's grid end
+ * (1104) by exactly that, and the lock holds the same fields frozen on every
+ * board. It stays the identity at 448 x 368. The difference has to keep the
+ * struct's 8-byte alignment, or the tail would pad differently and no single
+ * shift would describe it. */
+#define SAVE_AMOLED_ALGAE_CELLS 644
+#define SAVE_OFF(off) ((off) < 1104 ? (off) : (off) - SAVE_AMOLED_ALGAE_CELLS + ALGAE_CELLS)
+_Static_assert((ALGAE_CELLS - SAVE_AMOLED_ALGAE_CELLS) % 8 == 0,
+               "SAVE LAYOUT LOCK: this tank's algae grid moves the tail off its 8-byte alignment");
+#define SAVE_AT(f, off) _Static_assert(offsetof(save_t, f) == SAVE_OFF(off), "SAVE LAYOUT LOCK: save_t." #f " moved")
 #define FISH_AT(f, off) _Static_assert(offsetof(fish_save_t, f) == (off), "SAVE LAYOUT LOCK: fish_save_t." #f " moved")
 FISH_AT(preset, 0); FISH_AT(stage, 1); FISH_AT(pad, 2); FISH_AT(size, 4); FISH_AT(trust, 8);
 FISH_AT(bold, 12); FISH_AT(sociable, 16); FISH_AT(bold0, 20); FISH_AT(sociable0, 24);
@@ -180,7 +192,7 @@ SAVE_AT(coral_growth, 1636);
 SAVE_AT(cluster_x, 1640); SAVE_AT(cluster_z1, 1644); SAVE_AT(cluster_scheme, 1645);                   /* reef cluster, 09-24 */
 SAVE_AT(pad_cluster, 1646); SAVE_AT(cluster_growth, 1648);
 /* (the next field: SAVE_AT(its_name, 1652 or its type's alignment past it);) */
-_Static_assert(sizeof(save_t) >= 1656, "SAVE LAYOUT LOCK: save_t only ever grows");
+_Static_assert(sizeof(save_t) >= SAVE_OFF(1656), "SAVE LAYOUT LOCK: save_t only ever grows");
 /* NVS budget: the save is one blob in the nvs partition (0x9000, 0x6000 =
  * 6 pages of 4096 B; tools/make_installer.py pins the row). A page is 126
  * entries of 32 B, and NVS keeps one page free for its garbage collection:

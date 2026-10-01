@@ -20,6 +20,11 @@
 #else
 #define UP_SIGN   1
 #endif
+#ifdef CONFIG_POCKET_TANK_IMU_QMI8658_OUT_NEGATIVE
+#define OUT_UP_SIGN (-1)
+#else
+#define OUT_UP_SIGN 1
+#endif
 _Static_assert(UP_AXIS != OUT_AXIS, "the up axis cannot also be the one out of the glass");
 
 #define QMI8658_ADDR       0x6B
@@ -81,6 +86,7 @@ static const struct imu_chip s_chip = {
     .up_axis = UP_AXIS,
     .up_sign = UP_SIGN,
     .out_axis = OUT_AXIS,
+    .out_up_sign = OUT_UP_SIGN,
 };
 
 /* a part that answered but is not ours: give its slot on the bus back */

@@ -29,6 +29,13 @@
  * holding still a few hundred; a pick-up thousands. */
 #define MOTION_THRESH      220    /* ~0.013 g */
 #define IMU_MOTION_HOLD_US 1000000
+/* face down: the axis out of the glass points away from screen-up by more
+ * than half a g (the CYD's breakout reads 0.79 g there, light), while both
+ * in-screen axes stay under a third of one - lying flat, not tilted - and
+ * nothing moves, for 2 s. */
+#define FACE_THRESH        8192   /* 0.5 g */
+#define FACE_FLAT          5734   /* 0.35 g */
+#define IMU_FACE_HOLD_POLLS 8     /* 2 s at 4 Hz */
 
 static const char *TAG = "imu";
 /* the chip that answered, through imu_chip.h. NULL = no IMU, and every
@@ -40,6 +47,20 @@ static int64_t s_next_us;
 static int16_t s_prev[3]; static bool s_have_prev;
 static int64_t s_moved_us; static int s_motion; static int16_t s_last[3];
 static int64_t s_handled_us; static bool s_prev_moved;   /* two polls in a row over the threshold */
+#if CONFIG_POCKET_TANK_IMU_FACE_DOWN_SLEEP
+static int s_face_polls;          /* consecutive still, face-down polls */
+static bool s_face_armed;         /* seen not face down since the gesture last fired */
+static bool s_face_fired;         /* the gesture, waiting to be taken */
+
+/* the screen is facing the table: the out-of-glass axis reads the other way
+ * from screen-up, by a clear margin, and the screen lies level */
+static bool face_down(const int16_t a[3]) {
+    const int out = s_chip->out_axis, up = s_chip->up_axis, side = 3 - up - out;
+    int toward = a[out] * s_chip->out_up_sign;
+    int u = a[up] < 0 ? -a[up] : a[up], w = a[side] < 0 ? -a[side] : a[side];
+    return toward < -FACE_THRESH && u < FACE_FLAT && w < FACE_FLAT;
+}
+#endif
 
 /* The QMI8658 first, as it always was; then the MPU-6050 (the CYD's stand-in
  * while its QMI8658C is on the way). Each only where the build enables it. */
@@ -81,6 +102,18 @@ void imu_port_poll(int64_t now_us) {
     }
     for (int i = 0; i < 3; i++) { s_prev[i] = a[i]; s_last[i] = a[i]; }
     s_have_prev = true;
+#if CONFIG_POCKET_TANK_IMU_FACE_DOWN_SLEEP
+    /* the face-down gesture: still and face down for 2 s, once per episode */
+    if (face_down(a) && s_motion <= MOTION_THRESH) {
+        if (++s_face_polls == IMU_FACE_HOLD_POLLS && s_face_armed) {
+            s_face_fired = true; s_face_armed = false;
+            ESP_LOGI(TAG, "face down and still for 2 s");
+        }
+    } else {
+        s_face_polls = 0;
+        if (!face_down(a)) s_face_armed = true;
+    }
+#endif
     /* railed axis = a channel latched at full scale. Found 2026-08-31: X and
      * Z pegged at +-32767 while Y tracked reality, with clean comms, clean
      * config readback, soft reset no help - damaged channels on the MEMS die.
@@ -123,6 +156,17 @@ void imu_port_last(int16_t out[3], int *motion) { for (int i = 0; i < 3; i++) ou
 bool imu_port_handled(void) { return s_handled_us && esp_timer_get_time() - s_handled_us < IMU_MOTION_HOLD_US; }
 bool imu_port_moving(void) { return s_moved_us && esp_timer_get_time() - s_moved_us < IMU_MOTION_HOLD_US; }
 int  imu_port_motion(void) { return s_motion; }
+#if CONFIG_POCKET_TANK_IMU_FACE_DOWN_SLEEP
+bool imu_port_take_face_down(void) { bool f = s_face_fired; s_face_fired = false; return f; }
+int  imu_port_face_down_now(void) {
+    int16_t a[3];
+    if (!s_chip || !s_chip->read_accel(a)) return -1;
+    return face_down(a) ? 1 : 0;
+}
+#else
+bool imu_port_take_face_down(void) { return false; }   /* the gesture is not built: never */
+int  imu_port_face_down_now(void) { return -1; }
+#endif
 
 /* drowse bracket (see imu_port.h). Sleep: sensors off, chip quiesced while
  * the neighbouring rails cycle. Wake: never trust what the chip did in the

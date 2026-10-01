@@ -2990,9 +2990,12 @@ static const char *const SET_VOLUME[3] = { "OFF", "QUIET", "NORMAL" };
 static const char *const SET_LIGHT[2]  = { "MANUAL", "AUTO" };   /* the default first */
 #if SET_HAS_FLIP
 static const char *const SET_SCREEN[2] = { "UPRIGHT", "FLIPPED" };
+static const char *const SET_FACE[2]   = { "SLEEP", "IGNORE" };  /* the default first */
 #endif
 static bool g_set_flipped;                                       /* the SCREEN row's state, from the platform */
+static bool g_set_imu, g_set_face;                               /* an IMU answered; the face-down switch */
 void render_settings_set_flip(bool flipped) { g_set_flipped = flipped; }
+void render_settings_set_imu(bool imu, bool face_sleep) { g_set_imu = imu; g_set_face = face_sleep; }
 
 static void set_row(ctx_t *c, int row_y, const char *label, const char *const names[], int n, int chosen) {
     draw_text(c, SET_LABEL_X, row_y, UI_TEXT(2), MSP_TEAL, label);
@@ -3021,7 +3024,8 @@ void render_settings(const tank_t *t, uint16_t *fb, int stride, int bright_pct, 
     set_row(&c, SET_ROW2_Y, "VOLUME", SET_VOLUME, 3, volume < 0 ? 0 : volume > 2 ? 2 : volume);
     draw_text(&c, SET_LABEL_X, SET_NOTE_Y, UI_TEXT(2), MSP_DIM, "FISH ARE QUIET AT NIGHT");
 #if SET_HAS_FLIP
-    set_row(&c, SET_ROW4_Y, "SCREEN", SET_SCREEN, 2, g_set_flipped ? 1 : 0);
+    if (g_set_imu) set_row(&c, SET_ROW4_Y, "FACE DOWN", SET_FACE, 2, g_set_face ? 0 : 1);
+    else           set_row(&c, SET_ROW4_Y, "SCREEN", SET_SCREEN, 2, g_set_flipped ? 1 : 0);
 #endif
     set_row(&c, SET_ROW3_Y, "LIGHTS OUT", SET_LIGHT, 2, t->light_auto ? 1 : 0);
     if (t->light_auto) {
@@ -3077,7 +3081,11 @@ int render_settings_tap(float x, float y, int *value) {
     if (y >= SET_SEG_Y(SET_ROW1_Y) - UI(12) && y < SET_SEG_Y(SET_ROW2_Y) - UI(12)) { if (seg < 0) return SET_TAP_NONE; *value = SET_BRIGHT_PCT[seg]; return SET_TAP_BRIGHT; }
     if (y >= SET_SEG_Y(SET_ROW2_Y) - UI(12) && y < SET_SEG_Y(after_volume) - UI(12)) { if (seg < 0) return SET_TAP_NONE; *value = seg; return SET_TAP_VOLUME; }
 #if SET_HAS_FLIP
-    if (y >= SET_SEG_Y(SET_ROW4_Y) - UI(12) && y < SET_SEG_Y(SET_ROW3_Y) - UI(12)) { seg = set_segment(x, 2); if (seg < 0) return SET_TAP_NONE; *value = seg == 1; return SET_TAP_FLIP; }
+    if (y >= SET_SEG_Y(SET_ROW4_Y) - UI(12) && y < SET_SEG_Y(SET_ROW3_Y) - UI(12)) {
+        seg = set_segment(x, 2); if (seg < 0) return SET_TAP_NONE;
+        if (g_set_imu) { *value = seg == 0; return SET_TAP_FACE; }      /* SLEEP is the first segment */
+        *value = seg == 1; return SET_TAP_FLIP;
+    }
 #endif
     if (y >= SET_SEG_Y(SET_ROW3_Y) - UI(12) && y < SET_LIGHT_BAND_END)          { seg = set_segment(x, 2); if (seg < 0) return SET_TAP_NONE; *value = seg == 1; return SET_TAP_LIGHT; }
     if (y >= SET_LIGHT_BAND_END && x >= SET_NUM_X - UI(30) && x < SET_NUM_X + SET_NUM_BOX_W + UI(30)) {
@@ -3118,7 +3126,7 @@ int render_settings_touch(tank_t *t, float x, float y, bool down, int *value) {
                 } else if ((h == SET_HIT_IDLE_UP || h == SET_HIT_IDLE_DOWN) && t->light_auto) {
                     set_step(t, h == SET_HIT_IDLE_UP ? +1 : -1); progression_settings_changed();
                     r = SET_TAP_IDLE; *value = t->light_idle_s;
-                } else if (h == SET_TAP_CLOSE || h == SET_TAP_BRIGHT || h == SET_TAP_VOLUME || h == SET_TAP_FLIP) { r = h; *value = v; }
+                } else if (h == SET_TAP_CLOSE || h == SET_TAP_BRIGHT || h == SET_TAP_VOLUME || h == SET_TAP_FLIP || h == SET_TAP_FACE) { r = h; *value = v; }
             }
         }
     }

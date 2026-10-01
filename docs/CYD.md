@@ -166,9 +166,26 @@ Measured on the bench with the director's `imu` (2026-09-30): upside down
 flipped the picture 0.6 s later, back upright flipped it back, on its side in
 either direction changed nothing, and a pick-up read MOVING.
 
-**Set the SCREEN row to UPRIGHT once an IMU works.** The row is the keeper's
-setting for a board with none, and it is combined with the IMU's answer: a
-saved FLIPPED would hold the picture against gravity.
+**Face down sleeps the tank** (`POCKET_TANK_IMU_FACE_DOWN_SLEEP`, on for the
+CYD). Screen down, level and still for 2 s is a short press of the sleep key:
+the tank saves, darkens and light-sleeps. The IMU stays awake through the
+20-minute grace - there are no rails to cycle on the CYD - and each 1 s wake
+of the grace reads it once: no longer face down (turned up, or picked up)
+resumes in place, as BOOT does. No answer from the IMU keeps it asleep. After
+the grace the IMU sleeps and the board deep-sleeps; only BOOT wakes it then
+(motion could only with the INT wire). The gesture fires once per lie-down,
+so waking it with BOOT while it still lies face down does not put it straight
+back to sleep. Face down means the axis out of the glass reads more than
+0.5 g toward the table with both in-screen axes under 0.35 g; the sign that
+axis reads screen-up is `POCKET_TANK_IMU_MPU6050_OUT_NEGATIVE` (y for the
+mounting above: flat, screen up, Z reads -0.79 g).
+
+**The settings page's SCREEN row becomes FACE DOWN, SLEEP / IGNORE, once an
+IMU answers.** The row was the keeper's way to turn the picture on a board
+with no IMU; with one, the IMU turns it, so the row's place goes to the
+gesture's switch (SLEEP by default, kept in NVS as `tank/facedn`), and a
+SCREEN choice saved before is set aside. With no IMU the row is SCREEN, as
+before. The AMOLED's layout has no such row and is unchanged.
 
 ## Still open
 

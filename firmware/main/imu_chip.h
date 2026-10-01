@@ -20,6 +20,7 @@ struct imu_chip {
     int up_axis;                     /* 0=X 1=Y 2=Z: the axis along the screen's up, as mounted */
     int up_sign;                     /* +1 or -1: the sign that axis reads when held right side up */
     int out_axis;                    /* the axis out of the glass; the third is the other in-screen one */
+    int out_up_sign;                 /* +1 or -1: the sign that axis reads lying flat, screen UP */
 };
 
 #if CONFIG_POCKET_TANK_IMU_QMI8658

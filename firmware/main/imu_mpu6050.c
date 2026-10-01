@@ -38,6 +38,11 @@
 #else
 #define UP_SIGN   1
 #endif
+#ifdef CONFIG_POCKET_TANK_IMU_MPU6050_OUT_NEGATIVE
+#define OUT_UP_SIGN (-1)
+#else
+#define OUT_UP_SIGN 1
+#endif
 _Static_assert(UP_AXIS != OUT_AXIS, "the up axis cannot also be the one out of the glass");
 
 static const char *TAG = "imu";
@@ -103,6 +108,7 @@ static const struct imu_chip s_chip = {
     .up_axis = UP_AXIS,
     .up_sign = UP_SIGN,
     .out_axis = OUT_AXIS,
+    .out_up_sign = OUT_UP_SIGN,
 };
 
 const struct imu_chip *imu_mpu6050_probe(i2c_master_bus_handle_t bus) {

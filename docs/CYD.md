@@ -68,6 +68,8 @@ instead (`UI_COMPACT`):
 - **settings** gains a SCREEN row, UPRIGHT or FLIPPED, for a board with no
   IMU to turn the picture (`firmware/main/orientation.c`, kept in NVS beside
   the brightness, and re-saved after a tank reset as the brightness is).
+  Once an IMU answers, the same row is FACE DOWN, SLEEP / IGNORE instead
+  (see *The IMU*).
 
 Every page of the AMOLED build renders pixel-for-pixel as it did before the
 port: the sim's `--snapshot` set (69 pages) was compared before and after.
@@ -196,7 +198,50 @@ gesture's switch (SLEEP by default, kept in NVS as `tank/facedn`), and a
 SCREEN choice saved before is set aside. With no IMU the row is SCREEN, as
 before. The AMOLED's layout has no such row and is unchanged.
 
+### Gestures
+
+How each one is told apart. Every movement reading is the IMU polled at 4 Hz
+by `imu_port_poll` (`firmware/main/imu_port.c`), in counts at +-2 g (16384 a
+g); the README's *Gestures* table is the keeper's version of this.
+
+| gesture | detected as | effect | where |
+|---|---|---|---|
+| upside down | the up axis past 0.21 g the other way, and dominant over the other in-screen axis, for 3 polls (~0.75 s) | picture and touch turn 180 degrees | `imu_port.c`, applied per frame in `main.c` |
+| flat, or on its side | the up axis not dominant | nothing: the last orientation holds | the same vote |
+| picked up, carried | one poll's summed change over 220 (~0.013 g): `moving`, held 1 s | the codec stays warm | `main.c`, `audio_port_prewarm` |
+| held | `moving` on two polls in a row: `handled` | counts as attention for the light's idle rule (AUTO) | `tank_handled` |
+| screen down, level, still, 2 s (CYD) | out-of-glass axis over 0.5 g toward the table, in-screen axes under 0.35 g, motion under 1000, 8 polls; once per lie-down | sleeps as a BOOT press | `imu_port_take_face_down`, `main.c` |
+| screen up / picked up, asleep (CYD) | one read each 1 s slice of the grace: no longer face down | wakes in place - after a sleep that began face down | `imu_port_face_down_now`, `enter_sleep_for` |
+| BOOT, short press | the button (GPIO0), at release | sleep; within the 20-minute grace a press wakes in place; after it, deep sleep, and BOOT boots | `sleep_button_poll`, `enter_sleep_for` |
+| BOOT held + a tap | a touch landing while BOOT is down | the *Reset tank?* prompt | `sleep_button_poll` |
+| double-tap the glass | two quick taps, then a pause (LIGHTS OUT = MANUAL, the default) | the tank light on / off, saved | `tank.c` (`light_manual_off`) |
+
+The face-down rows need `POCKET_TANK_IMU_FACE_DOWN_SLEEP` (on for the CYD)
+and FACE DOWN = SLEEP in settings. Deep sleep after the grace hears only
+BOOT: waking it on movement needs the IMU's INT line wired (below).
+
 ## Still open
+
+- **The MPU-6050 is held, not mounted.** The axes in `sdkconfig.defaults.cyd`
+  are for it flat against the back with its pins toward the top edge; solder
+  or glue it that way, or re-read the axes (*The IMU*) for the mounting it
+  gets. Its power LED draws 1-3 mA, which dominates deep sleep on a cell -
+  lift it, or its resistor, if the cell's life matters.
+- **The QMI8658C, when it arrives,** is probed first and takes over by
+  itself, but its axes are the AMOLED's defaults
+  (`POCKET_TANK_IMU_QMI8658_UP_AXIS` / `_UP_NEGATIVE` / `_OUT_AXIS`, and
+  `_OUT_NEGATIVE` for face down): one upright and one flat reading with the
+  director's `imu` set them for the CYD.
+- **Waking from deep sleep on movement** needs the IMU's INT line on an RTC
+  GPIO - GPIO21 or GPIO14 on the 4-pin expansion socket (not GPIO3, a
+  strapping pin; never GPIO0) - an ext1 wake beside BOOT's ext0, and the
+  chip's motion interrupt armed at sleep. Not done: within the 20-minute
+  grace, face up already wakes it.
+- **Two face-down sleeps stayed dark, BOOT included,** in the first hour of
+  bring-up (2026-09-30) and never since, across every later round - BOOT and
+  face up, in either order. Not explained. If one recurs, note the steps; the
+  task watchdog armed across the sleep, for a backtrace, is the next
+  instrument.
 
 - **Battery.** The cell's voltage reaches GPIO9 through the board's divider,
   whose ratio is still to be measured. Without a meter the battery pill and

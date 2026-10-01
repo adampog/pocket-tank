@@ -662,7 +662,7 @@ seven-minute prompt check before an overnight run is always worth it.
 - [docs/AUDIO.md](docs/AUDIO.md) — the sound design: the cues, the asset pipeline, the power rules
 - [docs/memory_budget.md](docs/memory_budget.md) — flash, PSRAM, and SRAM plan
 - [docs/bringup.md](docs/bringup.md) — hardware bring-up checklist
-- [docs/CYD.md](docs/CYD.md) — the 2.8" ESP32-S3 CYD: the board, building, what the port changed
+- [docs/CYD.md](docs/CYD.md) — the 2.8" ESP32-S3 CYD: the board, building, what the port changed, the IMU and its gestures
 
 ## Status
 

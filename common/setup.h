@@ -62,6 +62,10 @@ void setup_begin_birth(tank_t *t, int slot);   /* the birth flow for the fry in 
  * flow once per arrival owed (never over a flow already up); returns the
  * slot it opened for, or -1 */
 int  setup_poll_birth(tank_t *t);
+/* a fry's welcome is up, or owed and about to open (it is born mid-frame,
+ * the flow opens after): the notices wait for it (2026-09-29). A welcome the
+ * director dropped is not due - it returns at the next boot. */
+bool setup_birth_due(void);
 void setup_begin_place(tank_t *t, int item);   /* the placement page for SD item `item` (placeable ones only) */
 bool setup_active(void);
 bool setup_is_birth(void);               /* the birth flow, not the first run */

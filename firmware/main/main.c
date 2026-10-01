@@ -38,6 +38,7 @@
 #include "setup.h"
 #include "nvs_flash.h"
 #include "esp_app_desc.h"
+#include "version.h"
 #include "rtc_port.h"
 #include "driver/i2c_master.h"
 #include "esp_async_memcpy.h"
@@ -163,7 +164,7 @@ static int restore_fish(void) {
         const fish_snap_t *s = &s_snap[i];
         if (!s->valid || s->x < 0 || s->x > TANK_W || s->y < 0 || s->y > TANK_H) continue;
         fish_t *f = &tank.fish[i];
-        f->x = s->x; f->y = s->y; f->heading = s->heading;
+        f->x = s->x; f->y = s->y; f->heading = s->heading; tank_fish_face(f);
         if (s->goal < GOAL_COUNT) f->goal.id = (goal_id_t)s->goal;
         n++;
     }
@@ -504,7 +505,7 @@ static void tank_task(void *arg) {
         tank_tick(&tank, dt, llm_ok ? advisor_llm_esp : advisor_rules);
         progression_tick(&tank, dt);
         battery_frame(now);
-        notice_tick(&tank, dt, tank.ui_cover);
+        notice_tick(&tank, dt, tank.ui_cover || setup_birth_due());   /* a fry's welcome first (2026-09-29) */
         { int cue = notice_take_cue(); if (cue >= 0) audio_port_play(cue, AUDIO_PITCH_ONE); }
         audio_port_set_night(tank.night);
         { static bool loop_on;                     /* the bubble loop rides the setup's placement page */
@@ -659,7 +660,7 @@ static void nvs_start(void) {
 }
 
 void app_main(void) {
-    ESP_LOGI(TAG, "pocket-tank boot%s",
+    ESP_LOGI(TAG, "pocket-tank v%s %s (build %s) boot%s", PT_RELEASE, PT_RELEASE_STAGE, version_port_string(),
              esp_sleep_get_wakeup_cause() == ESP_SLEEP_WAKEUP_EXT0 ? " (woken by button)" : "");
     gpio_config_t btn = { .pin_bit_mask = 1ULL << BTN_SLEEP, .mode = GPIO_MODE_INPUT,
                           .pull_up_en = GPIO_PULLUP_ENABLE };
@@ -749,6 +750,9 @@ void app_main(void) {
                  tank.n_fish ? tank.fish[0].hunger : 0.0f, battery_pct(), battery_port_vbat_mv());
     }
     notice_sync(&tank);                      /* what is already earned stays unannounced */
+    { uint32_t r = progression_loaded_release();   /* which release wrote the tank we just loaded */
+      if (r) ESP_LOGI(TAG, "the save was written by v%d.%d.%d", (int)(r >> 16), (int)(r >> 8 & 255), (int)(r & 255));
+      else ESP_LOGI(TAG, "the save predates release numbers (or there was none)"); }
     ESP_LOGI(TAG, "population %d (cap %d): %s + %s ...", tank.n_fish, POP_CAP,
              tank.fish[0].name, tank.n_fish > 1 ? tank.fish[1].name : "-");
     if (progression_setup_pending()) {           /* a new tank (fresh install, or a reset mid-flow): the welcome */

@@ -57,6 +57,11 @@ void render_fb_primed(const uint16_t *fb, unsigned epoch);
  * keep it in the same selection slot as a fish (a tap on the snail opens it,
  * a tap anywhere else dismisses it, no card cache). */
 #define RENDER_CARD_SNAIL 99
+/* fish_idx == RENDER_CARD_SHRIMP (2026-09-29): the shrimp school's card, the
+ * snail's way - a ring round the school and a centred card: a shrimp at 4x,
+ * how many, the pellets they have eaten, ten pips toward the next shrimp and
+ * where that stands (N more / arrives in N min / full / too much algae). */
+#define RENDER_CARD_SHRIMP 98
 void render_stats_card(const tank_t *t, int fish_idx, uint16_t *fb, int stride);
 /* Optional card cache (RENDER_CARD_W x RENDER_CARD_H uint16): with the scene
  * cache live, the card is redrawn at most 4x/s and blitted otherwise (~7 ms

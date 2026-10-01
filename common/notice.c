@@ -53,16 +53,27 @@ void notice_tick(const tank_t *t, float dt, bool blocked) {
     s_tms = t->tank_ms_bits;
 
     if (s_up) {
+        if (blocked) {                       /* something opened over it (2026-09-29: the birth flow over
+                                                a fry's population badge): it steps aside and comes back
+                                                after, whole and quiet - its cue has played */
+            if (s_qn < NOTICE_QUEUE) {
+                memmove(&s_q[1], &s_q[0], sizeof(notice_t) * (size_t)s_qn);
+                s_q[0] = s_cur; s_q[0].age = -1; s_qn++;
+            }
+            s_up = false; s_gap = 0;
+            return;
+        }
         s_cur.age += dt;
         if (s_cur.age >= NOTICE_UP_S) { s_up = false; s_gap = NOTICE_GAP_S; }
         return;
     }
     if (s_gap > 0) { s_gap -= dt; return; }
     if (blocked || !s_qn) return;
+    bool again = s_q[0].age < 0;             /* stepped aside earlier: no second chime */
     s_cur = s_q[0]; s_cur.age = 0;
     memmove(&s_q[0], &s_q[1], sizeof(notice_t) * (size_t)(s_qn - 1)); s_qn--;
     s_up = true;
-    s_cue = s_cur.kind == NOTICE_STAGE ? SND_STAGE_UP : s_cur.kind == NOTICE_LOW_BATTERY ? SND_LOW_BATTERY : SND_MILESTONE;
+    s_cue = again ? -1 : s_cur.kind == NOTICE_STAGE ? SND_STAGE_UP : s_cur.kind == NOTICE_LOW_BATTERY ? SND_LOW_BATTERY : SND_MILESTONE;
 }
 
 const notice_t *notice_current(void) { return s_up ? &s_cur : NULL; }

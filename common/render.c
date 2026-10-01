@@ -8,6 +8,7 @@
 #include "progression.h"
 #include "tank_events.h"
 #include "setup.h"
+#include "version.h"
 #include <math.h>
 #include <string.h>
 #include <stdlib.h>
@@ -175,28 +176,51 @@ static uint32_t mix(uint32_t a, uint32_t b, float p) {
 
 static int popcount32(uint32_t v) { int n = 0; while (v) { n += v & 1; v >>= 1; } return n; }
 
-/* per-fish roll state: +1 = normal, -1 = mirrored (facing left). Fish roll to
- * keep their back up instead of swimming inverted; animating the transition
- * reads as the fish turning over. Render-local so tank state stays pure. */
-static float g_roll[N_FISH_MAX] = { 1, 1, 1, 1, 1, 1 };
+/* the turn (2026-09-29, was a roll that flattened the fish to a line): the
+ * fish's yaw (tank.c) FORESHORTENS it along its length - side-on at +-1,
+ * head-on at 0 - and the sign mirrors it, so its back stays up. The head's
+ * yaw leads and the tail's follows, blended along the body, so mid-turn it
+ * bends. Eased here so the swing starts and lands softly. */
+static float yaw_ease(float y) { return y * (1.5f - 0.5f * y * y); }
+#define YAW_MIN 0.06f                    /* the outline never folds to a line (the body's
+                                         * thickness is drawn on its own: FISH_THICK) */
+#define FISH_THICK 4.2f                  /* half the body's thickness, local px: turned toward
+                                         * the glass a fish shows a rounded oval, not a card */
+/* the yaw at body point lx: the tail's at the tail tip (-26), the head's at the nose (16) */
+static float yaw_at(float yh, float yt, float lx) {
+    float u = (lx + 26) * (1.0f / 42);
+    u = u < 0 ? 0 : u > 1 ? 1 : u;
+    float s = yt + (yh - yt) * u;
+    if (s > -YAW_MIN && s < YAW_MIN) s = s < 0 ? -YAW_MIN : YAW_MIN;
+    return s;
+}
 
 /* The fish's body is a ledger of its life: stage sets size (tank.c) and fin
  * elaboration, hunger drains saturation, and earned markings stay:
  *   elder -> a longer tail and a dorsal crest. All procedural, zero flash. */
 /* `mark` scales the accent stripes: 1 in the tank (every stage wears the
  * same 2 x 5 px marks), the preview's size so they read on a big fish */
-static void draw_fish_core(ctx_t *c, const fish_t *f, float clock, bool asleep, float roll, float mark) {
+static void draw_fish_core(ctx_t *c, const fish_t *f, float clock, bool asleep, float mark) {
     float tail = sinf(clock * (8 + f->speed * 0.055f) + f->wander) *
                  (0.32f + f->speed * 0.007f);
     float stress = f->stress / 10.0f;
     float pale = f->hunger > 7 ? (f->hunger - 7) / 3.0f * 0.35f : 0;   /* hungry = washed out */
-    float ch = cosf(f->heading), sh = sinf(f->heading);
+    /* pitch: the heading folded to face right (the climb or dive), then the
+     * yaw scales x: X = s(lx) * (lx cos p - ly sin p), Y = lx sin p + ly cos p.
+     * The BODY tilts less than the path: a fish rises and sinks on its fins
+     * with its back near level, so the travel angle is eased toward a cap of
+     * ~35 deg (~55 at a dash) - never nose-straight-up (Strato 09-29: "too
+     * much time in a vertical position") */
+    float pmax = 0.61f + 0.35f * fminf(fmaxf((f->speed - 35) * (1 / 40.0f), 0), 1);
+    float p = pmax * tanhf(0.8f * atan2f(sinf(f->heading), fabsf(cosf(f->heading))) / pmax);
+    float cp = cosf(p), sp = sinf(p);
+    float yh = yaw_ease(f->yaw), yt = yaw_ease(f->yaw_tail);
     bool elder = f->stage == STAGE_ELDER, grown = f->stage >= STAGE_ADULT;
     float tail_len = elder ? 1.22f : 1.0f;
     uint32_t body = mix(mix(f->color, 0xf25b65, stress * 0.22f), 0x7a8a8e, pale);
     uint32_t fin  = mix(mix(f->fin, 0xf25b65, stress * 0.18f), 0x5a6a6e, pale);
-#define TX(lx, ly) (f->x + ((lx) * ch - (ly) * roll * sh) * f->size)
-#define TY(lx, ly) (f->y + ((lx) * sh + (ly) * roll * ch) * f->size)
+#define TX(lx, ly) (f->x + yaw_at(yh, yt, lx) * ((lx) * cp - (ly) * sp) * f->size)
+#define TY(lx, ly) (f->y + ((lx) * sp + (ly) * cp) * f->size)
 
     /* tail fin (triangle, flaps with tail phase) */
     {
@@ -220,14 +244,21 @@ static void draw_fish_core(ctx_t *c, const fish_t *f, float clock, bool asleep, 
         float xs[10], ys[10];
         for (int i = 0; i < 10; i++) { xs[i] = TX(blx[i], bly[i]); ys[i] = TY(blx[i], bly[i]); }
         fill_poly(c, xs, ys, 10, body);
+        /* its thickness: the cross-section at the deepest point, widening as
+         * the fish turns toward the glass (sin of the yaw angle) */
+        float sm = yaw_at(yh, yt, 2), rx = FISH_THICK * f->size * sqrtf(fmaxf(0, 1 - sm * sm));
+        if (rx >= 1) fill_ellipse(c, TX(2, 0), TY(2, 0), rx, 9.5f * f->size, body, 255);
     }
-    /* accent stripes (height tracks the roll so they flatten with the body).
+    /* accent stripes: on the flank, so they narrow with the turn and fade as
+     * the fish comes head-on (seen edge-on, a flank shows nothing).
      * A FRY has none yet: its markings come in with its first growth spurt
      * (the setup's colour page keeps the accent a "?" for that reason) */
-    float rmag = roll < 0 ? -roll : roll;
-    if (f->stage >= STAGE_JUV) for (int i = -1; i <= 1; i++)
-        fill_ellipse(c, TX(-3 + i * 6, 0), TY(-3 + i * 6, 0),
-                     2 * mark, (1.5f + 3.5f * rmag) * mark, f->accent, 150);
+    if (f->stage >= STAGE_JUV) for (int i = -1; i <= 1; i++) {
+        float lx = -3 + i * 6, s = fabsf(yaw_at(yh, yt, lx));
+        if (s > 0.25f)
+            fill_ellipse(c, TX(lx, 0), TY(lx, 0), 2 * mark * s, 5 * mark,
+                         f->accent, (int)(150 * (s - 0.25f) / 0.75f));
+    }
     /* eye — closed to a lid line when asleep (resting at night) */
     if (asleep) {
         fill_ellipse(c, TX(9, -3), TY(9, -3), 2.2f, 0.7f, 0x9fb4b8, 200);
@@ -238,12 +269,54 @@ static void draw_fish_core(ctx_t *c, const fish_t *f, float clock, bool asleep, 
 #undef TX
 #undef TY
 }
-/* the tank's fish: roll state per slot (the preview above has none) */
-static void draw_fish(ctx_t *c, const tank_t *t, const fish_t *f, int idx) {
-    float ch = cosf(f->heading);
-    float want = ch < -0.05f ? -1.0f : ch > 0.05f ? 1.0f : g_roll[idx];
-    g_roll[idx] += (want - g_roll[idx]) * 0.18f;
-    draw_fish_core(c, f, t->clock, t->night && f->goal.id == GOAL_REST, g_roll[idx], 1.0f);
+/* the tank's fish (the previews below draw a fish of their own) */
+static void draw_fish(ctx_t *c, const tank_t *t, const fish_t *f) {
+    draw_fish_core(c, f, t->clock, t->night && f->goal.id == GOAL_REST, 1.0f);
+}
+
+/* ---- the shrimp (2026-09-29): cherry shrimp from 18 x 8 pixel grids,
+ * facing right, drawn pixel by pixel through the fish's turn - the yaw
+ * foreshortens x - so they stay procedural (Strato: "all aquatic marine life
+ * sprites should be procedurally drawn. raster icons only for menus").
+ * What makes six pixels a shrimp: the hunched back, the body thinning to a
+ * fanned tail, one eye up front, antennae longer than the body; the tail,
+ * legs and antennae are see-through. Character is in the motion: paddling
+ * legs, a peck at the floor, the tail-flick escape. (working-assets/shrimp/
+ * has the approved drafts.) Tones: o belly edge, r cherry, h the back's
+ * light, s a glint, e the eye, a antenna, l legs, t tail fan. */
+#define SHRIMP_TONES 8
+static const char SHRIMP_KEYS[SHRIMP_TONES + 1] = "orhsealt";
+static const uint32_t SHRIMP_RGB[SHRIMP_TONES]  = { 0x6e0f1c, 0xd0262e, 0xff5a4a, 0xffb8a0, 0x100408, 0xff7a70, 0xc0303a, 0xff7060 };
+static const uint8_t  SHRIMP_ALPHA[SHRIMP_TONES] = { 255, 255, 255, 255, 255, 140, 190, 205 };
+static const char *const SHRIMP_IDLE_A[8] = {
+    "..................", "......ohhs......aa", "....ohrrrhhhs..a..", "..ohrrrrrrrrrea...",
+    ".trrrrrrrrrrrrrr..", "tto..oorrrrrroo...", "t......l.l.l.l.aa.", "................a." };
+static const char *const SHRIMP_IDLE_B[8] = {
+    "................a.", "......ohhs......a.", "....ohrrrhhhs..a..", "..ohrrrrrrrrrea...",
+    ".trrrrrrrrrrrrrr..", "tto..oorrrrrroo...", "t.....l.l.l.l..aa.", ".................." };
+static const char *const SHRIMP_PECK[8] = {      /* nose to the sand */
+    "..................", "......ohhs........", "....ohrrrhhhs.....", "..ohrrrrrrrrrr.aa.",
+    ".trrrrrrrrrrrrea..", "tto..oorrrrrrrrr..", "t......l.l.l.lo.a.", "................a." };
+static const char *const SHRIMP_DART[8] = {      /* the escape: tail snapped under, antennae streaming back */
+    "..................", "aaaa..ohhs........", "....ohrrrhhhs.....", "...orrrrrrrrrea...",
+    "...ttrrrrrrrrrr...", "...tt.oorrrroo....", "..................", ".................." };
+static void draw_shrimp(ctx_t *c, const shrimp_t *q, const src_t *pal) {
+    float sp2 = q->vx * q->vx + q->vy * q->vy;
+    const char *const *fr = q->dart > 0 ? SHRIMP_DART
+                          : q->pecking ? (fmodf(q->ph * 3, 1) < 0.5f ? SHRIMP_PECK : SHRIMP_IDLE_A)
+                          : (fmodf(q->ph * (sp2 > 9 ? 8 : 2.5f), 1) < 0.5f ? SHRIMP_IDLE_A : SHRIMP_IDLE_B);
+    float s = q->yaw;                                   /* head-on it is a sliver, never nothing */
+    if (s > -0.3f && s < 0.3f) s = s < 0 ? -0.3f : 0.3f;
+    int oy = (int)floorf(q->y + 0.5f) - 4;
+    for (int y = 0; y < 8; y++)
+        for (int x = 0; x < 18; x++) {
+            char ch = fr[y][x];
+            if (ch == '.') continue;
+            const char *k = strchr(SHRIMP_KEYS, ch);
+            if (!k) continue;
+            int ti = (int)(k - SHRIMP_KEYS);
+            px_blend_s(c, (int)floorf(q->x + (x - 9) * s + 0.5f), oy + y, &pal[ti], SHRIMP_ALPHA[ti]);
+        }
 }
 
 /* a bed of swaying seaweed fronds; seed varies phase/heights between beds.
@@ -1482,7 +1555,7 @@ void render_tank(const tank_t *t, uint16_t *fb, int stride) {
     int64_t p0 = PROF_MARK();
     bool cached = g_scene && g_dirty && stride == TANK_W;
     if (cached) memset(g_dirty, 0, TANK_H * DIRTY_WORDS_PER_ROW * sizeof(uint32_t));
-    struct { short x0, y0, x1, y1; } rects[5 + MAX_FOOD + MAX_BUBBLE + N_FISH_MAX + VEG_BEDS_MAX];
+    struct { short x0, y0, x1, y1; } rects[5 + MAX_FOOD + MAX_BUBBLE + N_FISH_MAX + VEG_BEDS_MAX + SHRIMP_MAX];
     int nr = 0;
 #define DYN_RECT(cx0, cy0, cx1, cy1) do { if (cached && nr < (int)(sizeof rects / sizeof rects[0])) { \
         rects[nr].x0 = (short)(cx0); rects[nr].y0 = (short)(cy0); \
@@ -1569,11 +1642,21 @@ void render_tank(const tank_t *t, uint16_t *fb, int stride) {
         px_blend(&c, (int)(b->x - r * 0.4f), (int)(b->y - r * 0.4f), 0xffffff, 120);
         DYN_RECT((int)b->x - 5, (int)b->y - 5, (int)b->x + 5, (int)b->y + 5);
     }
+    /* the shrimp school: on the sand and in the grass, under the fish and
+       the front fronds (the grass is their cover) */
+    if (t->sd_unlocks & SD_ITEM_SHRIMP) {
+        src_t pal[SHRIMP_TONES];
+        for (int k = 0; k < SHRIMP_TONES; k++) pal[k] = src_color(SHRIMP_RGB[k], c.dim);
+        for (int i = 0; i < t->shrimp_n; i++) {
+            draw_shrimp(&c, &t->shrimp[i], pal);
+            DYN_RECT((int)t->shrimp[i].x - 10, (int)t->shrimp[i].y - 5, (int)t->shrimp[i].x + 10, (int)t->shrimp[i].y + 5);
+        }
+    }
     PROF_ADD(3, p0);
     /* fish */
     for (int i = 0; i < t->n_fish; i++) {
         g_bb_on = true; g_bb_x0 = g_bb_y0 = 1 << 20; g_bb_x1 = g_bb_y1 = -1;
-        draw_fish(&c, t, &t->fish[i], i);
+        draw_fish(&c, t, &t->fish[i]);
         g_bb_on = false;
         if (g_bb_x1 >= g_bb_x0) DYN_RECT(g_bb_x0, g_bb_y0, g_bb_x1, g_bb_y1);
     }
@@ -1829,6 +1912,7 @@ static void slider(ctx_t *c, int x, int y, int w, float frac, uint32_t rgb,
 }
 
 static void button(ctx_t *c, int x, int y, int W, int H, uint32_t fill, uint32_t edge, const char *label, int scale);   /* below */
+static void draw_text(ctx_t *c, int x, int y, int scale, uint32_t rgb, const char *s);                                  /* the pixel font, below */
 #define CARD_MORE_H 22
 static void card_draw(ctx_t c, const tank_t *t, int fish_idx) {
     const fish_t *f = &t->fish[fish_idx];
@@ -1844,30 +1928,14 @@ static void card_draw(ctx_t c, const tank_t *t, int fish_idx) {
     for (int x = X; x < X + W; x++) { px(&c, x, Y, rgb565(f->color, 1)); px(&c, x, Y + H - 1, rgb565(f->color, 1)); }
     for (int y = Y; y < Y + H; y++) { px(&c, X, y, rgb565(f->color, 1)); px(&c, X + W - 1, y, rgb565(f->color, 1)); }
 
-    /* identity row: swatch, stage pips (earned ones lit), certainty dot -
-     * bright = the model was sure of its last decision, dim = torn */
-    fill_ellipse(&c, X + 14, Y + 14, 6, 6, f->color, 255);
-    fill_ellipse(&c, X + 11, Y + 11, 1.6f, 1.6f, 0xffffff, 150);
-    for (int i = 0; i < 4; i++) {
-        if (i <= (int)f->stage) fill_ellipse(&c, X + 30 + i * 10, Y + 14, 2.8f, 2.8f, f->accent, 255);
-        else ring(&c, X + 30 + i * 10, Y + 14, 2.8f, 0x2a3f45);
-    }
+    /* identity row: the fish's NAME and the certainty dot - bright = the
+     * model was sure of its last decision, dim = torn. (2026-09-29, Strato:
+     * the name at the top; the stage pips and growth bar are gone - "a bit
+     * ambiguous", the keeper sees the fish's size, and the milestones page a
+     * tap deeper names the stage. The colour swatch went with them: the
+     * border is the fish's colour, and a 7-letter name needs the row.) */
+    draw_text(&c, X + 8, Y + 8, 2, 0xffffff, f->name);
     fill_ellipse(&c, X + W - 14, Y + 14, 3.2f, 3.2f, 0xffffff, (int)(40 + 200 * f->goal.confidence));
-    /* growth: a thin bar under the pips filling toward the next stage (tended
-     * time only - fish grow while the tank is lit and lived-in). Elders are
-     * done growing, so no bar. */
-    if (f->stage < STAGE_ELDER) {
-        static const float edge[5] = { 0, STAGE_JUV_AGE, STAGE_ADULT_AGE, STAGE_ELDER_AGE, STAGE_ELDER_AGE };
-        float a0 = edge[f->stage], a1 = edge[f->stage + 1];
-        float frac = (progression_age_s(t, fish_idx) - a0) / (a1 - a0);
-        if (frac < 0) frac = 0;
-        if (frac > 1) frac = 1;
-        const int gx = X + 27, gw = 37;                        /* spans the pip row */
-        for (int xx = 0; xx < gw; xx++)
-            for (int yy = 0; yy < 2; yy++)
-                px_blend(&c, gx + xx, Y + 21 + yy, xx < (int)(gw * frac + 0.5f) ? f->accent : 0x2a3f45,
-                         xx < (int)(gw * frac + 0.5f) ? 235 : 150);
-    }
 
     /* needs: 5 segments each. Hunger is shown as FULLNESS - a full belly is
      * a full meter, and it drains as the fish gets hungry (a food icon next
@@ -1950,7 +2018,70 @@ static void snail_card_draw(ctx_t *c, const tank_t *t) {
     draw_text(c, X + (W - text_w(n, UI_TEXT(3))) / 2, Y + UI(134), UI_TEXT(3), 0xffffff, n);
 }
 
+/* the shrimp school's card (2026-09-29, Strato: "one tap should bring up a
+   card to show how much food they've eaten and progress to the next shrimp").
+   The pips fill with pellets - filled vs hollow, never colour alone. */
+#define SHRIMP_CARD_W 336
+#define SHRIMP_CARD_H 190
+static void shrimp_card_draw(ctx_t *c, const tank_t *t) {
+    int n = t->shrimp_n;
+    float cx = 0, cy = 0, r = 0;
+    for (int i = 0; i < n; i++) { cx += t->shrimp[i].x; cy += t->shrimp[i].y; }
+    cx /= n; cy /= n;
+    for (int i = 0; i < n; i++) { float d = tank_dist(cx, cy, t->shrimp[i].x, t->shrimp[i].y); if (d > r) r = d; }
+    ring(c, cx, cy, fminf(fmaxf(r + 14, 22), 90), 0x9fd8e2);
+    const int W = SHRIMP_CARD_W, H = SHRIMP_CARD_H, X = (TANK_W - W) / 2, Y = (TANK_H - H) / 2;
+    src_t bg = src_color(0x04141a, 1.0f);
+    for (int y = Y; y < Y + H; y++) span(c, X, X + W - 1, y, &bg, 235);
+    rect_edge(c, X, Y, W, H, 0x9fd8e2); rect_edge(c, X + 1, Y + 1, W - 2, H - 2, 0x1c2f36);
+    /* a shrimp at 4x, its legs paddling */
+    src_t pal[SHRIMP_TONES];
+    for (int k = 0; k < SHRIMP_TONES; k++) pal[k] = src_color(SHRIMP_RGB[k], 1.0f);
+    const char *const *fr = fmodf(t->clock * 2.5f, 1) < 0.5f ? SHRIMP_IDLE_A : SHRIMP_IDLE_B;
+    const int S = 4, sx = X + (W - 18 * S) / 2, sy = Y + 8;
+    for (int y = 0; y < 8; y++)
+        for (int x = 0; x < 18; x++) {
+            const char *k = fr[y][x] == '.' ? NULL : strchr(SHRIMP_KEYS, fr[y][x]);
+            if (!k) continue;
+            int ti = (int)(k - SHRIMP_KEYS);
+            for (int yy = 0; yy < S; yy++) span(c, sx + x * S, sx + x * S + S - 1, sy + y * S + yy, &pal[ti], SHRIMP_ALPHA[ti]);
+        }
+    char line[32];
+    snprintf(line, sizeof line, "%d SHRIMP", n);
+    draw_text(c, X + (W - text_w(line, 3)) / 2, Y + 46, 3, 0xffffff, line);
+    snprintf(line, sizeof line, "%d PELLET%s EATEN", (int)t->shrimp_eaten, t->shrimp_eaten == 1 ? "" : "S");
+    draw_text(c, X + (W - text_w(line, 2)) / 2, Y + 76, 2, 0x9fd8e2, line);
+    const char *cap = "NEXT SHRIMP";
+    draw_text(c, X + (W - text_w(cap, 2)) / 2, Y + 104, 2, 0x9fd8e2, cap);
+    bool full = n >= SHRIMP_MAX;
+    int have = full ? SHRIMP_PER_JOIN : t->shrimp_food;
+    const int pitch = 22, px0 = X + (W - (SHRIMP_PER_JOIN - 1) * pitch) / 2, py = Y + 132;
+    for (int i = 0; i < SHRIMP_PER_JOIN; i++) {
+        float x = px0 + i * pitch;
+        if (i < have) {
+            fill_ellipse(c, x, py, 6.5f, 6.5f, 0xffbd59, 255);
+            fill_ellipse(c, x - 2, py - 2, 2.2f, 2.2f, 0xffe9bd, 255);
+        } else ring(c, x, py, 6, 0x5a6a6e);
+    }
+    if (full) snprintf(line, sizeof line, "THE SCHOOL IS FULL");
+    else if (tank_shrimp_refusing(t)) snprintf(line, sizeof line, "TOO MUCH ALGAE TO EAT");
+    else if (t->shrimp_food >= SHRIMP_PER_JOIN && t->shrimp_cool > 0) {
+        int m = (int)ceilf(t->shrimp_cool / 60.0f);
+        snprintf(line, sizeof line, "ARRIVES IN %d MIN", m < 1 ? 1 : m);
+    } else {
+        int more = SHRIMP_PER_JOIN - t->shrimp_food;
+        snprintf(line, sizeof line, "%d MORE PELLET%s", more, more == 1 ? "" : "S");
+    }
+    draw_text(c, X + (W - text_w(line, 2)) / 2, Y + 158, 2, 0xffffff, line);
+}
+
 void render_stats_card(const tank_t *t, int fish_idx, uint16_t *fb, int stride) {
+    if (fish_idx == RENDER_CARD_SHRIMP) {
+        if (!(t->sd_unlocks & SD_ITEM_SHRIMP) || t->shrimp_n <= 0) return;
+        ctx_t sc = ctx_full(fb, stride, 1.0f);
+        shrimp_card_draw(&sc, t);
+        return;
+    }
     if (fish_idx == RENDER_CARD_SNAIL) {
         if (!(t->sd_unlocks & SD_ITEM_SNAIL) || t->snail_x < 0) return;
         ctx_t sc = ctx_full(fb, stride, 1.0f);
@@ -2119,7 +2250,8 @@ void render_fish_preview(uint16_t *fb, int stride, float x, float y, float size,
     f.stage = STAGE_ADULT;                       /* grown: the crest shows the fin colour */
     f.hunger = 4; f.stress = 0; f.goal.id = GOAL_EXPLORE;
     f.color = body; f.fin = fin; f.accent = accent;
-    draw_fish_core(&c, &f, clock, false, 1.0f, size);
+    tank_fish_face(&f);                          /* side-on, facing right */
+    draw_fish_core(&c, &f, clock, false, size);
 }
 void render_fish_portrait(uint16_t *fb, int stride, float x, float y, float size, const fish_t *who, float clock) {
     ctx_t c = ctx_full(fb, stride, 1.0f);
@@ -2128,7 +2260,8 @@ void render_fish_portrait(uint16_t *fb, int stride, float x, float y, float size
     f.stage = who->stage;
     f.hunger = 4; f.stress = 0; f.goal.id = GOAL_EXPLORE;
     f.color = who->color; f.fin = who->fin; f.accent = who->accent;
-    draw_fish_core(&c, &f, clock, false, 1.0f, size);
+    tank_fish_face(&f);
+    draw_fish_core(&c, &f, clock, false, size);
 }
 void render_confirm_reset(uint16_t *fb, int stride, float frac) {
     ctx_t c = ctx_full(fb, stride, 1.0f);              /* ignores night dimming, like the card */
@@ -2765,7 +2898,7 @@ static bool g_shp_sell_armed;        /* SELL tapped once: the next tap on it sel
 #define SHP_TWO_GAP UI(16)           /* MOVE and SELL side by side in the modal */
 #define SHP_TWO_X0  (SHP_MODAL_X + (SHP_MODAL_W - 2 * MSP_HOW_W - SHP_TWO_GAP) / 2)
 #define SHP_TWO_X1  (SHP_TWO_X0 + MSP_HOW_W + SHP_TWO_GAP)
-static const icon_t *shop_icon(int item) { return item == 0 ? &icon_shop_plant : item == 1 ? &icon_shop_snail : item == 2 ? &icon_shop_castle : item == 3 ? &icon_shop_coral : &icon_shop_cluster; }
+static const icon_t *shop_icon(int item) { return item == 0 ? &icon_shop_plant : item == 1 ? &icon_shop_snail : item == 2 ? &icon_shop_castle : item == 3 ? &icon_shop_coral : item == 4 ? &icon_shop_cluster : &icon_shop_shrimp; }
 /* pages (2026-09-23, the fourth item): SHP_PER_PAGE rows fit between the
  * coin and the foot buttons once the filler caption went (HOW TO EARN says
  * the same). With more items than a page holds, arrows at the header's
@@ -3050,9 +3183,11 @@ void render_settings(const tank_t *t, uint16_t *fb, int stride, int bright_pct, 
        fw version is something most people should not care about. minimize
        it", "make it 8px tall", "hug the bottom of the frame" (2026-09-16).
        The installer page shows the version it would write in the same words. */
-    char ver[40]; snprintf(ver, sizeof ver, "FW %s", version_port_string());
+    /* 2026-09-29: the release number first ("V0.2.0 ALPHA"), the build id after it */
+    char ver[64]; snprintf(ver, sizeof ver, "V%s %s  BUILD %s", PT_RELEASE, PT_RELEASE_STAGE, version_port_string());
     /* clipped short of CLOSE: on the CYD the button shares its line (6 px a
-       character in the 8 px font); a release version never gets that long */
+       character in the 8 px font), so the build id's tail is what gives way;
+       the release number always shows */
     int room = (MSP_CLOSE_X - UI(8) - SET_LABEL_X) / 6;
     if (room >= 0 && room < (int)sizeof ver) ver[room] = 0;
     draw_text_8px(&c, SET_LABEL_X, TANK_H - 8 - 6, MSP_DIM, ver);

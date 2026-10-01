@@ -1,4 +1,5 @@
 #include "progression.h"
+#include "version.h"
 #include <stddef.h>
 #include <string.h>
 #include <math.h>
@@ -107,6 +108,15 @@ typedef struct {
     float    cluster_x;
     uint8_t  cluster_z1, cluster_scheme, pad_cluster[2];
     float    cluster_growth;
+    /* the shrimp school (2026-09-29): how many (0 = an older save, or none
+     * bought), the pellets eaten toward the next, the seconds before another
+     * may join. Positions are not saved: a load puts them in the grass. */
+    uint8_t  shrimp_n, shrimp_food, pad_shrimp[2];
+    float    shrimp_cool;
+    int32_t  shrimp_eaten;               /* pellets eaten, lifetime (its card): in the tail's padding, so still 1664 B */
+    /* the release that wrote it (2026-09-29, version.h PT_RELEASE_NUM:
+     * 0x000200 = 0.2.0); 0 = a build from before release numbers */
+    uint32_t saved_release;
 } save_t;
 /* the smallest PTK2 save (pre-upkeep, 2026-08-30): anything shorter is not
  * ours. Every later build wrote sizeof(save_t) of its day - 448, 1112, 1304,
@@ -193,6 +203,12 @@ SAVE_AT(cluster_x, 1640); SAVE_AT(cluster_z1, 1644); SAVE_AT(cluster_scheme, 164
 SAVE_AT(pad_cluster, 1646); SAVE_AT(cluster_growth, 1648);
 /* (the next field: SAVE_AT(its_name, 1652 or its type's alignment past it);) */
 _Static_assert(sizeof(save_t) >= SAVE_OFF(1656), "SAVE LAYOUT LOCK: save_t only ever grows");
+SAVE_AT(shrimp_n, 1652); SAVE_AT(shrimp_food, 1653); SAVE_AT(pad_shrimp, 1654); SAVE_AT(shrimp_cool, 1656);   /* shrimp, 09-29 */
+SAVE_AT(shrimp_eaten, 1660);
+_Static_assert(sizeof(save_t) >= SAVE_OFF(1664), "SAVE LAYOUT LOCK: save_t only ever grows");
+SAVE_AT(saved_release, 1664);                                                                          /* release stamp, 09-29 (0.2.0) */
+_Static_assert(sizeof(save_t) >= SAVE_OFF(1672), "SAVE LAYOUT LOCK: save_t only ever grows");
+/* (the next field after the release stamp: SAVE_AT(its_name, 1668 or its type's alignment past it);) */
 /* NVS budget: the save is one blob in the nvs partition (0x9000, 0x6000 =
  * 6 pages of 4096 B; tools/make_installer.py pins the row). A page is 126
  * entries of 32 B, and NVS keeps one page free for its garbage collection:
@@ -203,14 +219,15 @@ _Static_assert(sizeof(save_t) >= SAVE_OFF(1656), "SAVE LAYOUT LOCK: save_t only 
  * is 3 x ~128 = ~390 entries, plus ~10 for the settings, "bat"/"hist" and
  * the batlog's "bed": under 2/3 of the 630, so GC always has room. Past it,
  * saves can start failing for space, and any nvs_flash_init error makes
- * main.c ERASE the partition. 1656 B today (54 entries a copy): 2344 B of
- * headroom. */
+ * main.c ERASE the partition. 1672 B today (the release stamp, 2026-09-29; ~54
+ * entries a copy): 2328 B of headroom. */
 #define SAVE_NVS_BUDGET 4000
 _Static_assert(sizeof(save_t) <= SAVE_NVS_BUDGET, "the save outgrew its NVS budget - see the math above");
 
 float progression_time_scale = 1.0f;
 
 static float s_age[N_FISH_MAX];      /* seconds of tended life per fish */
+static uint32_t s_loaded_release;    /* the release that wrote the save this boot loaded (0 = older / none) */
 static float s_since_save, s_dirty_since;
 static bool  s_dirty;
 static bool  s_ravenous;             /* begging/frenzy active until everyone's fed / give-up */
@@ -233,6 +250,7 @@ bool  progression_arrival_pending(void) { return s_arrival_pending; }
 bool  progression_setup_pending(void)   { return s_setup_pending; }
 void  progression_setup_done(tank_t *t) { s_setup_pending = false; progression_save(t); }
 int   progression_newborn(void)         { return s_newborn; }
+uint32_t progression_loaded_release(void) { return s_loaded_release; }
 void  progression_newborn_done(tank_t *t) { s_newborn = -1; progression_save(t); }
 
 static void set_ms(fish_t *f, uint32_t bit) { if (!(f->ms_bits & bit)) { f->ms_bits |= bit; mark_dirty(); } }
@@ -243,6 +261,7 @@ const sd_item_t SD_ITEMS[SD_ITEM_COUNT] = {
     { SD_ITEM_CASTLE, "CASTLE",     "STONE TOWERS AND AN ARCH",  "THE FISH SWIM THROUGH IT",    SD_PRICE_CASTLE },   /* 2026-09-16 */
     { SD_ITEM_CORAL,  "CORAL",      "A BRANCHING REEF CORAL,",   "GROWS FOR WEEKS, YOUR COLOR", SD_PRICE_CORAL },    /* 2026-09-23 */
     { SD_ITEM_CLUSTER, "REEF CLUSTER", "A MATURE REEF ON A ROCK,", "FILLS OUT, THEN IT BLOOMS",  SD_PRICE_CLUSTER },  /* 2026-09-24: the dearest; three looks on its page */
+    { SD_ITEM_SHRIMP,  "SHRIMP",    "A SCHOOL OF CHERRY SHRIMP", "THEY EAT SCRAPS AND MULTIPLY", SD_PRICE_SHRIMP },  /* 2026-09-29: a resident, like the snail; Strato: "should mention that they multiply" (28 chars, as the plant's) */
 };
 static void sd_award(tank_t *t, int n) {
     if (n <= 0) return;
@@ -272,7 +291,7 @@ static void sd_tick(tank_t *t) {
     s_sd_prev_feedings = t->player_feedings;
     int32_t hund = t->algae_colonies / SD_CHORE_EVERY;
     if (hund > t->sd_colonies_paid) { sd_award(t, SD_CHORE * (hund - t->sd_colonies_paid)); t->sd_colonies_paid = hund; }
-    hund = (int32_t)(t->trim_px / PX_PER_INCH) / SD_CHORE_EVERY;
+    hund = (int32_t)(t->trim_px / (PX_PER_CM * SD_TRIM_CM));
     if (hund > t->sd_inches_paid) { sd_award(t, SD_CHORE * (hund - t->sd_inches_paid)); t->sd_inches_paid = hund; }
 }
 int progression_sell_value(int item) { return item < 0 || item >= SD_ITEM_COUNT ? 0 : SD_ITEMS[item].price * SD_SELL_PCT / 100; }
@@ -297,6 +316,7 @@ bool progression_buy(tank_t *t, int item) {
     if (it->bit == SD_ITEM_CASTLE) tank_castle_place(t);
     if (it->bit == SD_ITEM_CORAL) tank_coral_place(t);
     if (it->bit == SD_ITEM_CLUSTER) tank_cluster_place(t);
+    if (it->bit == SD_ITEM_SHRIMP) { tank_shrimp_place(t, SHRIMP_START); t->shrimp_food = 0; t->shrimp_cool = 0; }
     progression_save(t);                                   /* a purchase sticks at once */
     return true;
 }
@@ -309,7 +329,7 @@ const char *const *progression_sd_earn_lines(void) {
         snprintf(lines[2], 30, "+%d  A NEW FRY IS BORN", SD_BIRTH);
         snprintf(lines[3], 30, "+%d  A FISH FULLY TRUSTS", SD_TRUST);
         snprintf(lines[4], 30, "+%d  %d ALGAE COLONIES", SD_CHORE, SD_CHORE_EVERY);
-        snprintf(lines[5], 30, "+%d  TRIMMING THE GRASS", SD_CHORE);   /* no unit: the rate is internal */
+        snprintf(lines[5], 30, "+%d  %d CM OF GRASS CUT", SD_CHORE, SD_TRIM_CM);
         for (int i = 0; i < SD_EARN_LINES; i++) ptr[i] = lines[i];
         ptr[SD_EARN_LINES] = NULL; made = true;
     }
@@ -587,7 +607,7 @@ void progression_set_age(tank_t *t, int idx, float seconds) {
  * *saved_unix gets the save's wall-clock stamp (0 if unknown). */
 static bool load_save(tank_t *t, int64_t *saved_unix) {
     save_t sv; memset(&sv, 0, sizeof sv);
-    *saved_unix = 0;
+    *saved_unix = 0; s_loaded_release = 0;
     /* an older build's shorter save fills a prefix; the zeroed rest reads as
      * every later tail's defaults (see the tail comments in save_t) */
     size_t got = 0;
@@ -598,6 +618,7 @@ static bool load_save(tank_t *t, int64_t *saved_unix) {
         sv.bubble_x = 0;                       /* = the default column */
     }
     *saved_unix = sv.saved_unix;
+    s_loaded_release = sv.saved_release;
     t->n_fish = 0;
     for (int i = 0; i < sv.n_fish; i++) {
         const fish_save_t *s = &sv.fish[i];
@@ -657,6 +678,12 @@ static bool load_save(tank_t *t, int64_t *saved_unix) {
     if (sv.cluster_x > 0) tank_decor_set(t, 4, sv.cluster_x, sv.cluster_z1 ? sv.cluster_z1 - 1 : DECOR_Z_FRONT);
     tank_cluster_set_scheme(t, sv.cluster_scheme);
     t->cluster_growth = sv.cluster_growth > 0 ? sv.cluster_growth : 0;
+    if (t->sd_unlocks & SD_ITEM_SHRIMP) {             /* the school back in the grass, its count and its progress */
+        tank_shrimp_place(t, sv.shrimp_n >= SHRIMP_START ? sv.shrimp_n : SHRIMP_START);
+        t->shrimp_food = sv.shrimp_food <= SHRIMP_PER_JOIN ? sv.shrimp_food : SHRIMP_PER_JOIN;
+        t->shrimp_cool = sv.shrimp_cool > 0 && sv.shrimp_cool <= SHRIMP_COOLDOWN_S ? sv.shrimp_cool : 0;
+        t->shrimp_eaten = sv.shrimp_eaten > 0 ? sv.shrimp_eaten : 0;
+    } else { t->shrimp_n = 0; t->shrimp_eaten = 0; }
     s_sd_prev_feedings = t->player_feedings;         /* meals before this boot are not back-paid */
     s_sd_pending = 0;
     s_arrival_pending = sv.arrival_pending; s_spawn_in = -1;
@@ -823,6 +850,7 @@ void progression_tick(tank_t *t, float dt) {
 bool progression_save(tank_t *t) {
     save_t sv; memset(&sv, 0, sizeof sv);
     sv.magic = SAVE_MAGIC; sv.saved_unix = clock_port_now_unix(); sv.clock = t->clock;
+    sv.saved_release = PT_RELEASE_NUM;
     /* light_override / light_on stay zero in the save (2026-09-15) */
     sv.light_idle_s = (uint16_t)t->light_idle_s; sv.light_auto = t->light_auto; sv.light_manual_off = t->light_manual_off;
     sv.arrival_pending = s_arrival_pending; sv.n_fish = (uint8_t)t->n_fish;
@@ -848,6 +876,8 @@ bool progression_save(tank_t *t) {
     sv.coral_growth = t->coral_growth;
     sv.cluster_x = t->cluster_x > 0 ? t->cluster_x : 0; sv.cluster_z1 = (uint8_t)(t->cluster_z + 1); sv.cluster_scheme = t->cluster_scheme;
     sv.cluster_growth = t->cluster_growth;
+    sv.shrimp_n = (t->sd_unlocks & SD_ITEM_SHRIMP) ? t->shrimp_n : 0; sv.shrimp_food = t->shrimp_food;
+    sv.shrimp_cool = t->shrimp_cool > 0 ? t->shrimp_cool : 0; sv.shrimp_eaten = t->shrimp_eaten;
     sv.setup_pending = s_setup_pending;
     sv.newborn_p1 = (uint8_t)(s_newborn >= 0 && s_newborn < t->n_fish ? s_newborn + 1 : 0);
     sv.bubble_x = t->bubble_x;

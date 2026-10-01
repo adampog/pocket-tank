@@ -160,6 +160,15 @@ typedef struct {
     int    preset;          /* roster index (colors, base size, temperament) */
     float x, y;
     float heading;          /* radians */
+    float yaw;              /* which way it faces, -1 (left) .. +1 (right), seen
+                             * from the side: a U-turn swings it through 0 (the
+                             * fish head-on) and the swim follows it. Not saved. */
+    float yaw_tail;         /* the tail's yaw, a beat behind the head's: mid-turn
+                             * the body bends (render.c draws both) */
+    int8_t facing;          /* the side it swims on, +1 right / -1 left: changes only
+                             * by a committed turn (or the glass). Not saved. */
+    float behind;           /* seconds its way has lain behind it (a turn commits
+                             * past a threshold); below 0 = just turned, settling */
     float speed, target_speed;
     float wander;           /* wander phase */
     float size;             /* ~1.0 */
@@ -215,7 +224,43 @@ typedef struct {
     int8_t parent_a, parent_b;
 } fish_t;
 
-typedef struct { float x, y, age; bool alive, from_player; } food_t;
+/* a pellet: it sinks ~43 s from the surface to the floor, then RESTS there
+ * FOOD_FLOOR_S before it dissolves (2026-09-29, for the shrimp school - every
+ * tank alike; measured: the fish's hunger is unchanged). floor_s = seconds on
+ * the floor so far, nibbled = seconds of shrimp pecking (SHRIMP_PECK_S eats it). */
+typedef struct { float x, y, age; bool alive, from_player; float floor_s, nibbled; } food_t;
+#define FOOD_LIFE_S   45.0f          /* in the water: gone at this age if it never reached the floor */
+#define FOOD_FLOOR_Y  (TANK_H - 14)  /* where a pellet comes to rest */
+#define FOOD_FLOOR_S  15.0f          /* ... and how long it rests there (Strato, 2026-09-29) */
+
+/* the shrimp school (2026-09-29, the shop's sixth item, SD_ITEM_SHRIMP): cherry
+ * shrimp that swim as a loose school with a pull toward the grass, swarm the
+ * pellets that sink below the grass's top (falling or on the floor), drift up
+ * to the canopy now and then, and scatter when the keeper taps near them.
+ * Bought as SHRIMP_START grown adults; every SHRIMP_PER_JOIN pellets the school
+ * eats brings one more, up to SHRIMP_MAX, never two within SHRIMP_COOLDOWN_S
+ * (the count stops at SHRIMP_PER_JOIN while it waits - no burst). Over
+ * SHRIMP_REFUSE_COVER of the glass fouled they refuse food: they stay in the
+ * grass and turn away from pellets, so the school stops growing (never shrinks).
+ * Strato's words throughout (2026-09-29): "they should just swarm pellets that
+ * hit the ground", "a user cant spam this", "when there is too much algae,
+ * shrimp will refuse to eat". Drawn procedurally (render.c draw_shrimp). */
+#define SHRIMP_START        4
+#define SHRIMP_MAX          10
+#define SHRIMP_PER_JOIN     10
+#define SHRIMP_COOLDOWN_S   (15.0f * 60.0f)
+#define SHRIMP_REFUSE_COVER 0.5f
+#define SHRIMP_PECK_S       8.0f     /* shrimp-seconds of pecking to finish a pellet: a huddle of
+                                      * 3-4 takes 2-3 s - long enough to see them swarm it */
+typedef struct {
+    float  x, y, vx, vy;             /* centre of the body; px/s */
+    float  yaw;                      /* -1..1 as the fish's: the turn foreshortens it */
+    float  behind;                   /* s its way has been behind it (a committed turn, as the fish) */
+    float  ph;                       /* animation phase: legs, the peck, the bob */
+    float  dart;                     /* s left of a tail-flick escape */
+    int8_t facing;
+    uint8_t pecking;                 /* at a floor pellet this frame */
+} shrimp_t;
 typedef struct { float x, y, vy, wobble; bool column; } bubble_t;
 
 typedef struct tank {
@@ -281,13 +326,14 @@ typedef struct tank {
     /* the chore counters behind the sand dollars (2026-09-15): a COLONY is a
      * connected patch of film the keeper's wipe took the last cell of (the
      * snail's grazing never counts); trim_px is frond length actually cut,
-     * PX_PER_INCH to the inch. Both saved. */
+     * PX_PER_CM to the centimeter. Both saved. */
     int32_t  algae_colonies;
     float    trim_px;
     /* sand dollars (progression.c owns the economy; tank.c reads the unlocks):
      * the balance, the lifetime total, what the shop has sold (SD_ITEM_*),
      * and the ledger that keeps an award from paying twice - per fish (bits
-     * SD_PAID_*), and how many hundreds of colonies / inches have been paid.
+     * SD_PAID_*), and how many payouts of colonies / grass have been made
+     * (sd_inches_paid: named for the inches it counted until 2026-09-29).
      * All saved. */
     int32_t  sd_balance, sd_earned;
     uint32_t sd_unlocks;
@@ -331,6 +377,18 @@ typedef struct tank {
     uint8_t  cluster_scheme;
     float    cluster_growth;       /* CLUSTER_START..CLUSTER_FULL; 0..1 = it fills out, 1..FULL = the tentacles come */
     float    cluster_acc;          /* awake seconds pooled, as coral_acc */
+    /* the shrimp school (SD_ITEM_SHRIMP, see SHRIMP_*): how many (saved), the
+     * pellets eaten toward the next one (0..SHRIMP_PER_JOIN, saved), the seconds
+     * before another may join (saved), each shrimp's motion (not saved: a load
+     * places them in the grass), and the school's current goal and its timer. */
+    uint8_t  shrimp_n;
+    uint8_t  shrimp_food;
+    float    shrimp_cool;
+    int32_t  shrimp_eaten;         /* pellets the school has eaten, lifetime (its card; saved) */
+    uint8_t  shrimp_taps;          /* quick taps on the school in a row (the third scares them; not saved) */
+    float    shrimp_tap_t;         /* seconds since the last one */
+    shrimp_t shrimp[SHRIMP_MAX];
+    float    shrimp_tx, shrimp_ty, shrimp_tt;
     /* keeper habits the tank remembers (persisted by progression.c) */
     float    feed_spot_x;          /* where the keeper usually feeds (EMA); <0 = unknown */
     int      player_feedings;      /* MEALS: feedings the fish ate from (2026-09-14, Strato: a tap
@@ -429,6 +487,9 @@ void  tank_new_population(tank_t *t);
 int   tank_add_fish(tank_t *t, int parent_a, int parent_b);
 /* (re)build slot from a roster preset: used by persistence to restore a fish */
 void  tank_make_fish(tank_t *t, int slot, int preset, float sociable, float bold, stage_t stage);
+/* face the fish the way its heading points, at once (no turn plays): for
+ * code that places a fish by hand - the sim's scenes, the wake restore */
+void  tank_fish_face(fish_t *f);
 void  tank_tick(tank_t *t, float dt, advisor_fn advise);
 /* Sleep metabolism (device drowse mode: screen dark, fish asleep). Advances
  * ONLY slow physiology - hunger up, energy recovered, stress gone - at
@@ -544,10 +605,11 @@ void  tank_set_bubble_x(tank_t *t, float x);
  * The items are bits in tank_t.sd_unlocks; progression.c sells them
  * (progression_buy) and tank.c gives them their place. A bought thing is in
  * the tank for good. */
-enum { SD_ITEM_PLANT = 1u << 0, SD_ITEM_SNAIL = 1u << 1, SD_ITEM_CASTLE = 1u << 2, SD_ITEM_CORAL = 1u << 3, SD_ITEM_CLUSTER = 1u << 4, SD_ITEM_COUNT = 5 };
+enum { SD_ITEM_PLANT = 1u << 0, SD_ITEM_SNAIL = 1u << 1, SD_ITEM_CASTLE = 1u << 2, SD_ITEM_CORAL = 1u << 3, SD_ITEM_CLUSTER = 1u << 4, SD_ITEM_SHRIMP = 1u << 5, SD_ITEM_COUNT = 6 };
 /* per-fish paid bits (sd_paid_fish) */
 enum { SD_PAID_JUV = 1u << 0, SD_PAID_ADULT = 1u << 1, SD_PAID_ELDER = 1u << 2, SD_PAID_TRUST = 1u << 3 };
 #define PX_PER_INCH 24.0f          /* the tank reads as ~15 in tall; a fish ~1.7 in */
+#define PX_PER_CM   (PX_PER_INCH / 2.54f)   /* the shop pays grass by the centimeter (SD_TRIM_CM) */
 /* the live bed count: VEG_BEDS, or VEG_BEDS_MAX with the sword plant bought;
  * every loop over beds runs to this. tank_veg_kind is the species (render). */
 int   tank_veg_beds(const tank_t *t);
@@ -556,6 +618,19 @@ veg_kind_t tank_veg_kind(const tank_t *t, int b);
  * snail on the glass, bottom left */
 void  tank_plant_place(tank_t *t);
 void  tank_snail_place(tank_t *t);
+/* the shrimp: the bought school (SHRIMP_START in the grass), or n of them
+ * (a load, the sim's key); refusing = the glass is too fouled for them to eat */
+void  tank_shrimp_place(tank_t *t, int n);
+bool  tank_shrimp_refusing(const tank_t *t);
+/* a tap on the school (2026-09-29, Strato: "one tap should bring up a card
+ * ... it should be a triple tap which scares them (same as for fish)"). Hit:
+ * within a fingertip of any shrimp (the platforms test the fish and the snail
+ * first). Tap: counts quick taps on the school - its own count, so a double tap
+ * there never toggles the light - and returns the count: 1 = toggle its card,
+ * 2 = nothing, 3+ = the startle, exactly the water's triple tap (the fish
+ * spooked, the shrimp scatter): the platform drops the card. */
+bool  tank_shrimp_hit(const tank_t *t, float x, float y);
+int   tank_shrimp_tap(tank_t *t, float x, float y);
 void  tank_castle_place(tank_t *t);
 void  tank_coral_place(tank_t *t);
 void  tank_cluster_place(tank_t *t);

@@ -29,7 +29,7 @@ layout change can't silently ship a stale offset.
 
 Web Serial needs a secure context: serve the folder over HTTPS (or from
 http://localhost for a local check: `python3 -m http.server -d installer/dist`)."""
-import argparse, datetime, hashlib, json, os, shutil, struct, subprocess, sys
+import argparse, datetime, hashlib, json, os, re, shutil, struct, subprocess, sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DEFAULT_BUILD = os.path.expanduser("~/.cache/pocket-tank/fw-build")
@@ -104,9 +104,18 @@ def check_nvs_untouched(parts, ptable):
         sys.exit(f"{ptable}: its model row disagrees with firmware/partitions.csv - rebuild the firmware")
 
 
+def release_version():
+    """common/version.h's release (2026-09-29): "v0.2.0 alpha" - the number
+    the tank's settings page shows - with the git build id beside it."""
+    h = open(os.path.join(ROOT, "common", "version.h")).read()
+    rel = re.search(r'#define PT_RELEASE\s+"([^"]+)"', h).group(1)
+    stage = re.search(r'#define PT_RELEASE_STAGE\s+"([^"]*)"', h).group(1)
+    return f"v{rel} {stage}".strip() + f" (build {git_version()})"
+
+
 def git_version():
     try:
-        out = subprocess.run(["git", "-C", ROOT, "describe", "--tags", "--always", "--dirty"],
+        out = subprocess.run(["git", "-C", ROOT, "describe", "--always", "--dirty", "--exclude=*"],   # the hash, never a tag
                              capture_output=True, text=True, check=True).stdout.strip()
         return out
     except Exception:
@@ -142,7 +151,7 @@ def main():
             sys.exit(f"missing: {src}")
     check_nvs_untouched(parts, os.path.join(a.build_dir, fa["partition-table"]["file"]))
 
-    version = a.version or git_version()
+    version = a.version or release_version()
     date = datetime.date.today().isoformat()
     out = a.out
     if os.path.isdir(out):

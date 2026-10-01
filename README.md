@@ -31,6 +31,10 @@ no toolchain needed. Got the 2.8-inch **CYD** (ES3C28P) instead? This fork
 runs there too: **[build and flash it](#run-it-on-the-28-cyd)** with one
 script.
 
+The current release is **v0.2.0** (alpha); the settings page shows the one
+on your tank. What changed in each release:
+**[pocketank.com/updates](https://pocketank.com/updates/)**.
+
 ## Contents
 
 - [The numbers](#the-numbers)
@@ -113,9 +117,15 @@ survival: a starving fish picks `seek_food` 89% of the time at minimum across
 every personality. When the top two choices are close, the fish pauses for a
 moment before committing.
 
+Fish turn the way real ones do. A fish whose way lies behind it commits to
+turning round instead of flip-flopping: it glances back first, then its
+head swings through a head-on view, the body shortening toward the glass
+and the tail following a beat behind, and it pulls away. Its body stays
+near level as it rises and sinks.
+
 ![The stats card](docs/media/sim-stats-card.png)
 
-Tap a fish for its stats card. Needs, traits, and trust are revealed as the
+Tap a fish for its stats card, its name at the top. Needs, traits, and trust are revealed as the
 fish shows that side of itself, so a new fish's card is mostly blank. The
 MORE button at its foot (or a tap anywhere on the card) opens the milestones
 page, where the SETTINGS and UPGRADES buttons live.
@@ -198,8 +208,8 @@ done, the parents court in the grass and the fry is born within the minute.
 them on things for the tank. A meal the fish eat from your hand pays 2; a
 fish growing up pays 5, 10 and 25 for juvenile, adult and elder; a fry
 born 20; a fish that comes to trust you completely 15; every hundred algae
-colonies you wipe away pay 25, and so does keeping the grass trimmed,
-again and again. Nothing is ever needed and nothing is lost: a tank with no
+colonies you wipe away pay 25, and so does every 250 cm of grass you
+cut, again and again. Nothing is ever needed and nothing is lost: a tank with no
 sand dollars is exactly the tank there was before. The coin on the
 milestones page's TANK row shows your balance, and it (or the UPGRADES
 button) opens the shop: a row per item with its price, UNLOCK when you can
@@ -278,14 +288,31 @@ row of three tiles instead of a colour: REEF is the art's orange, purple
 and cyan; LAGOON is pink, blue and lime; DUSK is magenta, teal and gold.
 It sits in a hump of stones like the coral.
 
+**The shrimp school.** The sixth thing in the shop (180), on the second
+page beside the reef. Four cherry shrimp arrive as a loose school, drawn by
+code pixel by pixel like everything else that swims, and turning the same
+way the fish do. They keep to the foot of the grass most of the time,
+wander out onto the sand, and now and then drift slowly up a bed to the top
+of its canopy. They are the tank's cleanup crew: a pellet that sinks below
+the top of the grass is theirs, still falling or resting on the floor
+(pellets now rest there fifteen seconds before they dissolve), and the
+school crowds in to peck it clean. Every ten pellets they eat brings another
+shrimp, up to ten, never two within fifteen minutes. With more than half
+the glass covered in algae they refuse food: they keep to the grass and
+turn away from pellets, so the school stops growing until you wipe the
+glass (it never shrinks). Tap the school for its card: how many, the
+pellets they have eaten, and ten pips toward the next shrimp. Three quick
+taps on them scare them like the fish: they flick away tail first and
+regroup.
+
 **Selling back, and the short way to a piece.** Tap and hold a still
 finger on any decoration in the tank and its placement page opens right
 there, with MOVE, DEPTH and, in the top-left corner, SELL. The same SELL
 sits next to MOVE in the shop's modal for anything you own. A sale needs
 two taps: the first arms the button and shows the refund, the second
 sells. You get 20% of the price back, the piece leaves the tank, and it is
-in the shop again at full price. The snail is not for sale; it is a
-permanent resident.
+in the shop again at full price. The snail and the shrimp are not for
+sale; they are permanent residents.
 
 ![The shop](docs/media/sim-shop.png)
 ![Unlocking the snail](docs/media/sim-shop-modal.png)
@@ -301,6 +328,8 @@ permanent resident.
 ![A violet coral IN FRONT of everything](docs/media/sim-coral-front.png)
 ![Placing the coral: the COLOR row above the water](docs/media/sim-place-coral.png)
 ![The shop's second page](docs/media/sim-shop2.png)
+![The shrimp school drifting up to the top of the grass](docs/media/sim-shrimp.png)
+![The shrimp school's card](docs/media/sim-shrimp-card.png)
 ![The reef cluster on the day it is bought](docs/media/sim-cluster-young.png)
 ![The reef cluster in full bloom](docs/media/sim-cluster.png)
 ![The LAGOON look, IN FRONT](docs/media/sim-cluster-front.png)
@@ -401,14 +430,16 @@ The trained model (`model/out/model_q4.bin` + `tokenizer.bin`) ships in the repo
 brain works out of the box.
 
 In the window, the mouse is your finger: tap the water surface or drag down
-from the top edge to feed, click a fish for its stats card, click the card
+from the top edge to feed, click a fish for its stats card (the shrimp for
+theirs), click the card
 (or its MORE button) for milestones, hold the button to rest a finger on the glass, three quick
 clicks to startle, two to toggle the light, drag across the glass to wipe
 algae, and stroke sideways through a bed to trim it. Keys: **F** feed at the
 mouse, **N** light, **A** auto light, **H** handle the tank (moving the
 mouse over the window counts too), **L** switch
 between the rule stub and the LLM brain, **U** overlays, **M** milestones,
-**4** the shop, **D** fifty sand dollars to try it,
+**4** the shop, **D** fifty sand dollars to try it, **W** the shrimp school
+(again adds one),
 **X** the reset prompt, **S** the first-run setup (or drops a birth's pages), **R** force an arrival
 (the birth flow opens), **Z** jump through seven
 hours of sleep, **G** grow the grass and algae now, **V** volume, **B** the
@@ -461,8 +492,9 @@ Every version loads the saves of every earlier one (the save only ever grows
 at the tail, and the one field that went in mid-struct is slid into place on
 load). To start over, hold BOOT and tap the glass for the *Reset tank?*
 prompt; the page also has an "erase and install fresh" button for a board
-that won't get that far. The settings page shows the firmware version at
-its foot, small and dim, so you can tell what you run. It is the same mechanism ESPHome and Home
+that won't get that far. The settings page shows the release at its foot,
+small and dim ("V0.2.0 ALPHA", then the build id), so you can tell what
+you run. It is the same mechanism ESPHome and Home
 Assistant use ([ESP Web Tools](https://esphome.github.io/esp-web-tools/)),
 running entirely in the browser over Web Serial.
 
@@ -662,6 +694,9 @@ seven-minute prompt check before an overnight run is always worth it.
   of the fish
 - ✅ Browser installer: one click from Chrome or Edge, hosted at
   stratobuilds.com; updating is the same click and never erases a tank
+- ✅ v0.2.0 (alpha), the first numbered release: fish that turn like fish,
+  the fish's name on its card, a shrimp school that eats what falls and
+  multiplies, and a fry's welcome that comes before its badges
 - 🔋 In progress: battery life. The first night on the board's power-off
   and the awake draw with a full tank are being measured with the tank's
   own log; what is in flight and how to pick it up is in

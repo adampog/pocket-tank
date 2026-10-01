@@ -41,6 +41,9 @@ bool    persist_port_load(void *buf, size_t max, size_t *got); /* the saved blob
 bool    persist_port_save(const void *buf, size_t len);
 bool    persist_port_erase(void);                          /* EVERY saved tank, parked copies included */
 int64_t clock_port_now_unix(void);                         /* 0 if unknown */
+/* the release (version.h PT_RELEASE_NUM) of the build that wrote the save
+ * the last load read - 0 for a save from before release numbers, or none */
+uint32_t progression_loaded_release(void);
 const char *version_port_string(void);                     /* the build's git describe (device: the app
                                                             * descriptor; sim: PT_VERSION) - the settings page */
 
@@ -170,7 +173,7 @@ const char *const *progression_fry_tip(int kind);
  * detected in progression_tick from what the tank already counts - a MEAL
  * (player_feedings), a stage reached (MS_REACHED_*), a birth (do_arrival),
  * full trust (10.0, once per fish), every SD_CHORE_EVERY algae colonies
- * removed and inches of grass trimmed (tank.c's counters) - and the ledger
+ * removed and every SD_TRIM_CM of grass trimmed (tank.c's counters) - and the ledger
  * in tank_t (sd_paid_fish, sd_colonies_paid, sd_inches_paid) keeps a save
  * from paying twice. A tank saved before the shop is paid what it already
  * earned on its first boot with it, once (Strato: "yes, pay it once"). */
@@ -180,13 +183,18 @@ const char *const *progression_fry_tip(int kind);
 #define SD_STAGE_ELDER 25
 #define SD_BIRTH       20
 #define SD_TRUST       15
-#define SD_CHORE       25          /* per SD_CHORE_EVERY colonies / inches */
+#define SD_CHORE       25          /* per SD_CHORE_EVERY colonies / SD_TRIM_CM of grass */
 #define SD_CHORE_EVERY 100
+/* the grass pays by length cut: 250 cm (2026-09-29, Strato; was 100 inches =
+ * 254 cm). The HOW TO EARN line names it - "100 IN OF GRASS CUT" read as the
+ * word "in" to a UK keeper (issue #9), and no unit read as 25 for any trim */
+#define SD_TRIM_CM     250
 #define SD_PRICE_PLANT 40
 #define SD_PRICE_SNAIL 80
 #define SD_PRICE_CASTLE 150
 #define SD_PRICE_CORAL 100
 #define SD_PRICE_CLUSTER 240
+#define SD_PRICE_SHRIMP 180       /* 2026-09-29, Strato (first 300, then 180) */
 typedef struct {
     uint32_t    bit;               /* SD_ITEM_* */
     const char *name;              /* <= 12 chars, the pixel font */

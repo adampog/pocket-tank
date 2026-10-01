@@ -38,6 +38,7 @@ extern const icon_t icon_shop_coral;
 extern const icon_t icon_shop_plant;
 extern const icon_t icon_shop_sand_dollar_16;
 extern const icon_t icon_shop_sand_dollar_64;
+extern const icon_t icon_shop_shrimp;
 extern const icon_t icon_shop_snail;
 extern const icon_t icon_snail_glass;
 extern const icon_t icon_snail_upright;

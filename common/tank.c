@@ -5,6 +5,7 @@
 #include "tank_events.h"
 #include <math.h>
 #include <stddef.h>
+#include <string.h>
 
 #define TAU 6.2831853f
 static void veg_sync(tank_t *t);   /* veg_growth[] = per-bed mean of veg_h[][] */
@@ -141,13 +142,18 @@ void tank_set_look(tank_t *t, int slot, uint32_t body, uint32_t accent) {
         for (int i = 0; i < LOOK_N; i++) if (LOOK_ACCENT[i] != f->color) { f->accent = LOOK_ACCENT[i]; break; }
 }
 
+void tank_fish_face(fish_t *f) {
+    f->facing = cosf(f->heading) < 0 ? -1 : 1;
+    f->yaw = f->yaw_tail = f->facing; f->behind = 0;
+}
+
 void tank_make_fish(tank_t *t, int slot, int preset, float sociable, float bold, stage_t stage) {
     fish_t *f = &t->fish[slot];
     const preset_t *p = &ROSTER[preset];
     f->preset = preset; tank_set_name(t, slot, p->name);
     f->model_name = TRAINED_NAMES[slot % N_TRAINED_NAMES];   /* names carry no signal */
     f->x = tank_randf(t, 90, TANK_W - 90); f->y = tank_randf(t, 80, TANK_H - 90);
-    f->heading = tank_randf(t, 0, TAU);
+    f->heading = tank_randf(t, 0, TAU); tank_fish_face(f);
     f->speed = 0; f->target_speed = 0; f->wander = f->x * 0.05f;
     f->base_size = p->size; f->size = p->size; f->turn_rate = p->turn_rate;
     f->hunger = tank_randf(t, 3, 6); f->energy = tank_randf(t, 5, 8);
@@ -185,7 +191,7 @@ void tank_set_bubble_x(tank_t *t, float x) {
 
 static void place_near_reef(tank_t *t, fish_t *f) {
     f->x = t->reef_x + tank_randf(t, -10, 30); f->y = t->reef_y - 30 + tank_randf(t, -10, 10);
-    f->heading = tank_randf(t, -0.6f, 0.6f);
+    f->heading = tank_randf(t, -0.6f, 0.6f); tank_fish_face(f);
 }
 
 void tank_new_population(tank_t *t) {
@@ -745,6 +751,194 @@ void tank_snail_place(tank_t *t) {
     t->snail_x = SNAIL_MARGIN + 10; t->snail_y = SNAIL_FLOOR_Y;   /* on the floor, bottom left, facing right */
     t->snail_heading = 0; t->snail_cell = -1; t->snail_graze = 0;
 }
+/* ---- the shrimp school (SD_ITEM_SHRIMP; tank.h has the rules) ----
+ * A loose school steering to one goal - a spot at the foot of the grass most
+ * of the time, now and then out on the sand or up in open water - each shrimp
+ * at its own offset from it, keeping about a body length from its neighbours
+ * (Strato: "space them out a bit more so they overlap a tad less"). A pellet
+ * resting on the floor becomes the goal and they crowd in to peck it. They
+ * turn like the fish: a committed turn, then a settle. Tuned against the
+ * 2026-09-29 mockup Strato approved. */
+#define SHRIMP_CRUISE    12.0f        /* px/s */
+#define SHRIMP_DART      58.0f        /* px/s, the tail-flick escape */
+#define SHRIMP_SEP_X     18.0f        /* personal space, side to side (a body and a bit) ... */
+#define SHRIMP_SEP_Y     11.0f        /* ... and up and down (7 stacked them in towers on the glass) */
+#define SHRIMP_TAP_R     30.0f        /* a fingertip on a shrimp: its card */
+#define SHRIMP_HEAD      7.0f         /* the head's offset from the body's centre, along the facing */
+static float shrimp_hash(int i, int k) {  /* a fixed 0..1 per shrimp: its place in the school (no RNG draw) */
+    uint32_t h = (uint32_t)i * 2654435761u ^ (uint32_t)k * 40503u;
+    h ^= h >> 13; h *= 0x5bd1e995u; h ^= h >> 15;
+    return (h & 0xffff) / 65535.0f;
+}
+bool tank_shrimp_refusing(const tank_t *t) { return tank_algae_cover(t) > SHRIMP_REFUSE_COVER; }
+static void shrimp_spawn(tank_t *t, int i, float x) {
+    shrimp_t *q = &t->shrimp[i];
+    memset(q, 0, sizeof *q);
+    q->x = x; q->y = FOOD_FLOOR_Y - 6 - shrimp_hash(i, 3) * 14;
+    q->facing = shrimp_hash(i, 4) < 0.5f ? -1 : 1; q->yaw = q->facing;
+    q->ph = shrimp_hash(i, 5) * 6.28f;
+}
+void tank_shrimp_place(tank_t *t, int n) {
+    if (n < 0) n = 0;
+    if (n > SHRIMP_MAX) n = SHRIMP_MAX;
+    int wide = 0; float wbest = -1, x0 = 0, x1 = 0;           /* at the foot of the widest bed, clear of the glass */
+    for (int b = 0; b < tank_veg_beds(t); b++) { float a, z; tank_veg_bed(t, b, &a, &z, NULL, NULL); if (z - a > wbest) { wbest = z - a; wide = b; } }
+    tank_veg_bed(t, wide, &x0, &x1, NULL, NULL);
+    float cx = clampf((x0 + x1) * 0.5f, 60, TANK_W - 60);
+    for (int i = 0; i < n; i++) shrimp_spawn(t, i, cx + (shrimp_hash(i, 1) - 0.5f) * (40 + n * 9));
+    t->shrimp_n = (uint8_t)n;
+    t->shrimp_tx = cx; t->shrimp_ty = FOOD_FLOOR_Y - 12; t->shrimp_tt = 4;
+}
+/* the school's next goal. Mostly the foot of the grass; now and then out on
+ * the sand; and now and then a slow DRIFT UP a bed to the top of its canopy
+ * (or at least SHRIMP_RISE_MIN above the floor when the grass is cut short),
+ * a while up there, then back down - Strato, 2026-09-29: "you dont get to see
+ * them much ... i dont want them swimming all over the tank all the time but a
+ * chance for them to randomly drift up to at least the top of the sea grass".
+ * About a quarter of their time goes on these trips. Never while refusing food. */
+#define SHRIMP_RISE_P    0.06f         /* of the goals picked (0.10: up off the bottom ~45% of the time) */
+#define SHRIMP_RISE_MIN  60.0f         /* px above the floor, at the least */
+static void shrimp_goal(tank_t *t, bool refusing) {
+    int beds = tank_veg_beds(t);
+    float r = tank_randf(t, 0, 1);
+    if (!refusing && r < SHRIMP_RISE_P && beds > 0) {              /* up the grass to the canopy */
+        int b = (int)tank_randf(t, 0, beds - 0.001f);
+        float x0, x1, top; tank_veg_bed(t, b, &x0, &x1, &top, NULL);
+        t->shrimp_tx = x1 - x0 > 16 ? tank_randf(t, x0 + 8, x1 - 8) : (x0 + x1) * 0.5f;
+        t->shrimp_ty = fminf(top + tank_randf(t, -8, 10), FOOD_FLOOR_Y - SHRIMP_RISE_MIN);
+        t->shrimp_tt = tank_randf(t, 22, 32);                           /* the drift up is slow; then a while at the top */
+        return;
+    }
+    if ((refusing || r < SHRIMP_RISE_P + 0.62f) && beds > 0) {     /* the grass: the school's cover */
+        int b = (int)tank_randf(t, 0, beds - 0.001f);
+        float x0, x1; tank_veg_bed(t, b, &x0, &x1, NULL, NULL);
+        t->shrimp_tx = x1 - x0 > 16 ? tank_randf(t, x0 + 8, x1 - 8) : (x0 + x1) * 0.5f;
+    } else t->shrimp_tx = tank_randf(t, 40, TANK_W - 40);         /* out on the sand */
+    t->shrimp_ty = refusing || tank_randf(t, 0, 1) < 0.8f ? FOOD_FLOOR_Y - tank_randf(t, 12, 26)
+                                                          : FOOD_FLOOR_Y - tank_randf(t, 30, 64);   /* a swim up into open water */
+    t->shrimp_tt = tank_randf(t, 6, 11);
+}
+/* the grass's top over x: the bed under it, or the beds' average over open
+ * sand. A pellet that has sunk below it is the shrimp's to take, still falling
+ * or resting on the floor (Strato, 2026-09-29: "if food falls below the
+ * seagrass canopy its fair game for shrimp even as its still floating downward") */
+static float shrimp_canopy_y(const tank_t *t, float x) {
+    float sum = 0; int nb = tank_veg_beds(t);
+    for (int b = 0; b < nb; b++) {
+        float x0, x1, top; tank_veg_bed(t, b, &x0, &x1, &top, NULL);
+        if (x >= x0 && x <= x1) return top;
+        sum += top;
+    }
+    return nb ? sum / nb : FOOD_FLOOR_Y;
+}
+static bool shrimp_food_ok(const tank_t *t, const food_t *p) {
+    return p->alive && (p->floor_s > 0 || p->y >= shrimp_canopy_y(t, p->x));
+}
+static void shrimp_tick(tank_t *t, float dt) {
+    if (!(t->sd_unlocks & SD_ITEM_SHRIMP)) return;
+    if (t->shrimp_n < SHRIMP_START) tank_shrimp_place(t, SHRIMP_START);
+    bool refusing = tank_shrimp_refusing(t);
+    if (t->shrimp_cool > 0) t->shrimp_cool -= dt;
+    int n = t->shrimp_n;
+    float cx = 0, cy = 0;                                          /* the school's middle */
+    for (int i = 0; i < n; i++) { cx += t->shrimp[i].x; cy += t->shrimp[i].y; }
+    cx /= n; cy /= n;
+    /* a newcomer: ten pellets eaten and the cooldown out - it steps out of the grass by the school */
+    if (t->shrimp_food >= SHRIMP_PER_JOIN && t->shrimp_cool <= 0 && n < SHRIMP_MAX) {
+        shrimp_spawn(t, n, cx + (shrimp_hash(n, 1) - 0.5f) * 20);
+        t->shrimp_n = (uint8_t)++n;
+        t->shrimp_food = 0; t->shrimp_cool = SHRIMP_COOLDOWN_S;
+    }
+    t->shrimp_tt -= dt;
+    if (t->shrimp_tt <= 0) shrimp_goal(t, refusing);
+    int fp = -1; float best = 1e9f;                                /* the pellet in reach nearest the school */
+    if (!refusing)
+        for (int k = 0; k < MAX_FOOD; k++) {
+            const food_t *p = &t->food[k];
+            if (!shrimp_food_ok(t, p)) continue;
+            float d = fabsf(p->x - cx) + fabsf(p->y - cy) * 0.5f;
+            if (d < best) { best = d; fp = k; }
+        }
+    float gx = fp >= 0 ? t->food[fp].x : t->shrimp_tx;
+    float gy = fp < 0 ? t->shrimp_ty : t->food[fp].floor_s > 0 ? FOOD_FLOOR_Y - 2 : t->food[fp].y;   /* on the floor, or still sinking */
+    float spread = 40 + n * 9;                                    /* the school's width: 76 px for 4, 130 for 10 */
+    /* the whole school fits between the side glass: a goal by the wall (a bed
+       against it, a pellet in the corner) keeps them spread, not piled up on
+       the glass; the ones nearest a corner pellet still reach it */
+    float half = (fp >= 0 ? spread * 0.45f : spread) * 0.5f + 16;
+    gx = clampf(gx, half, TANK_W - half);
+    for (int i = 0; i < n; i++) {
+        shrimp_t *q = &t->shrimp[i];
+        q->ph += dt; q->pecking = 0;
+        if (q->dart > 0) {
+            q->dart -= dt;
+            float k = powf(0.2f, dt); q->vx *= k; q->vy *= k;
+        } else {
+            float ox = (shrimp_hash(i, 1) - 0.5f) * spread, oy = (shrimp_hash(i, 2) - 0.5f) * 24;
+            float tx = gx + (fp >= 0 ? ox * 0.45f : ox), ty = gy + (fp >= 0 ? 0 : oy);
+            float dx = tx - q->x, dy = ty - q->y, d = sqrtf(dx * dx + dy * dy) + 1e-3f;
+            bool chase = fp >= 0;                                       /* food in reach: they hurry, up or down alike */
+            float sp = fminf(SHRIMP_CRUISE * (chase ? 1.6f : 1.0f), d * 0.9f);
+            float wx = dx / d * sp, wy = dy / d * sp * (chase ? 1.0f : 0.7f);
+            float sx = fp >= 0 ? SHRIMP_SEP_X * 0.6f : SHRIMP_SEP_X, sy = fp >= 0 ? SHRIMP_SEP_Y * 0.6f : SHRIMP_SEP_Y;
+            for (int j = 0; j < n; j++) {
+                if (j == i) continue;
+                float nx = (q->x - t->shrimp[j].x) / sx, ny = (q->y - t->shrimp[j].y) / sy, e = sqrtf(nx * nx + ny * ny);
+                if (e < 1 && e > 0) { wx += nx / e * (1 - e) * 22; wy += ny / e * (1 - e) * 9; }
+            }
+            float a = fminf(1, dt * 2.5f);
+            q->vx += (wx - q->vx) * a; q->vy += (wy - q->vy) * a;
+            float hx = q->x + SHRIMP_HEAD * q->facing;
+            for (int k = 0; k < MAX_FOOD; k++) {                       /* a pellet at its head */
+                food_t *p = &t->food[k];
+                if (!shrimp_food_ok(t, p) || fabsf(p->x - hx) > 8 || fabsf(p->y - q->y) > 9) continue;
+                if (refusing) {                                        /* too much algae: it turns its back on it */
+                    q->facing = (int8_t)(q->x > p->x ? 1 : -1); q->behind = -0.6f;
+                    q->vx = q->facing * 6.0f;
+                } else if (k == fp) {
+                    q->pecking = 1; q->vx *= 0.5f;
+                    q->vy = p->floor_s > 0 ? q->vy * 0.5f : 8.0f;           /* a falling pellet: it sinks with it */
+                    p->nibbled += dt;
+                }
+                break;
+            }
+        }
+        q->x += q->vx * dt;
+        q->y += q->vy * dt + sinf(q->ph * 2.1f) * dt * 1.2f;
+        q->x = clampf(q->x, 12, TANK_W - 12);
+        q->y = clampf(q->y, 40, FOOD_FLOOR_Y - 1);
+        if (q->dart <= 0) {                                             /* the committed turn */
+            int8_t want = q->vx > 1.5f ? 1 : q->vx < -1.5f ? -1 : q->facing;
+            if (want != q->facing) { q->behind += dt; if (q->behind > 0.35f) { q->facing = want; q->behind = -0.6f; } }
+            else q->behind = fminf(0, q->behind + dt);
+        }
+        q->yaw += clampf(q->facing - q->yaw, -5 * dt, 5 * dt);
+    }
+    if (fp >= 0 && t->food[fp].nibbled >= SHRIMP_PECK_S) {             /* eaten: one toward the next shrimp */
+        t->food[fp].alive = false;
+        if (t->shrimp_food < SHRIMP_PER_JOIN) t->shrimp_food++;       /* stops at ten while the cooldown runs */
+        t->shrimp_eaten++;
+    }
+}
+/* asleep: nothing is eaten, so nothing joins; the cooldown runs on lived time */
+static void shrimp_sleep(tank_t *t, float seconds) {
+    if (!(t->sd_unlocks & SD_ITEM_SHRIMP)) return;
+    t->shrimp_cool = fmaxf(0, t->shrimp_cool - seconds);
+}
+static void shrimp_scatter(tank_t *t, float x, float y, float radius) {
+    if (!(t->sd_unlocks & SD_ITEM_SHRIMP)) return;
+    bool any = false;
+    for (int i = 0; i < t->shrimp_n; i++) {
+        shrimp_t *q = &t->shrimp[i];
+        float dx = q->x - x, dy = q->y - y, d = sqrtf(dx * dx + dy * dy);
+        if (d >= radius) continue;
+        if (d < 1) { dx = q->facing ? -q->facing : 1; dy = 0; d = 1; }
+        q->dart = 0.55f; q->vx = dx / d * SHRIMP_DART; q->vy = dy / d * SHRIMP_DART * 0.7f;
+        q->facing = (int8_t)(q->vx > 0 ? -1 : 1); q->yaw = q->facing;   /* tail first: they flick backward */
+        q->behind = -0.8f; any = true;
+    }
+    if (any) t->shrimp_tt = fminf(t->shrimp_tt, 3.0f);                /* and regroup somewhere new */
+}
 void tank_plant_place(tank_t *t) {
     tank_veg_set(t, 3, VEG_START);                          /* a young plant; it grows from here */
 }
@@ -891,7 +1085,7 @@ void tank_feed(tank_t *t, float x, int n) {
         t->food[i].alive = true; t->food[i].from_player = true;
         t->food[i].x = clampf(x + tank_randf(t, -14, 14), 20, TANK_W - 20);
         t->food[i].y = tank_randf(t, 6, 18);
-        t->food[i].age = 0;
+        t->food[i].age = 0; t->food[i].floor_s = 0; t->food[i].nibbled = 0;
         n--; dropped++;
     }
     if (dropped) tank_emit(TEV_FEED, -1);        /* the plink is for pellets, not for the tap (a full tank drops none) */
@@ -899,6 +1093,34 @@ void tank_feed(tank_t *t, float x, int n) {
     t->feed_open = true;                         /* a meal once somebody eats from it */
 }
 
+/* the triple tap: fish near it bolt (stress, a little trust lost) and the
+ * shrimp scatter - from the water or from the school alike */
+static void tank_startle(tank_t *t, float x, float y) {
+    tank_emit(TEV_SPOOK, -1);
+    t->startled = true; t->startle_x = x; t->startle_y = y; t->startle_cooldown = STARTLE_COOLDOWN;
+    for (int i = 0; i < t->n_fish; i++) {
+        fish_t *f = &t->fish[i];
+        if (tank_dist(f->x, f->y, x, y) < STARTLE_RADIUS) {
+            f->stress = fminf(10, f->stress + 2.5f);
+            f->trust = fmaxf(0, f->trust - 0.4f);
+        }
+    }
+    shrimp_scatter(t, x, y, STARTLE_RADIUS);
+}
+bool tank_shrimp_hit(const tank_t *t, float x, float y) {
+    if (!(t->sd_unlocks & SD_ITEM_SHRIMP)) return false;
+    for (int i = 0; i < t->shrimp_n; i++)
+        if (tank_dist(t->shrimp[i].x, t->shrimp[i].y, x, y) <= SHRIMP_TAP_R) return true;
+    return false;
+}
+int tank_shrimp_tap(tank_t *t, float x, float y) {
+    tank_handled(t);
+    if (t->shrimp_tap_t > TAP_WINDOW) t->shrimp_taps = 0;
+    if (t->shrimp_taps < 255) t->shrimp_taps++;
+    t->shrimp_tap_t = 0;
+    if (t->shrimp_taps == 3) tank_startle(t, x, y);
+    return t->shrimp_taps;
+}
 void tank_touch_tap(tank_t *t, float x, float y) {
     tank_handled(t);
     if (y < FEED_ZONE_Y) { tank_feed(t, x, 3); return; }     /* surface tap = feed */
@@ -908,22 +1130,14 @@ void tank_touch_tap(tank_t *t, float x, float y) {
     if (t->startled) {                              /* chasing: keep them spooked */
         t->startle_x = x; t->startle_y = y; t->startle_cooldown = STARTLE_COOLDOWN;
         for (int i = 0; i < t->n_fish; i++) t->fish[i].stress = fminf(10, t->fish[i].stress + 0.6f);
-    } else if (t->tap_count >= 3) {                 /* aggressive: engage */
-        tank_emit(TEV_SPOOK, -1);
-        t->startled = true; t->startle_x = x; t->startle_y = y; t->startle_cooldown = STARTLE_COOLDOWN;
-        for (int i = 0; i < t->n_fish; i++) {
-            fish_t *f = &t->fish[i];
-            if (tank_dist(f->x, f->y, x, y) < STARTLE_RADIUS) {
-                f->stress = fminf(10, f->stress + 2.5f);
-                f->trust = fmaxf(0, f->trust - 0.4f);
-            }
-        }
-    }
+        shrimp_scatter(t, x, y, STARTLE_RADIUS);
+    } else if (t->tap_count >= 3) tank_startle(t, x, y);   /* aggressive: engage */
 }
 
 /* per-frame bookkeeping for the touch state machine */
 static void touch_tick(tank_t *t, float dt) {
     t->tap_burst_t += dt;
+    t->shrimp_tap_t += dt;
     /* two taps then a pause: the light (MANUAL, the default; in settings'
        AUTO the idle rule owns it - 2026-09-15: the old always-on override
        rode in the save and froze a tank in permanent day) */
@@ -1014,7 +1228,7 @@ void tank_scatter_food(tank_t *t, int n) {
         t->food[i].alive = true; t->food[i].from_player = false;
         t->food[i].x = tank_randf(t, 25, TANK_W - 25);
         t->food[i].y = tank_randf(t, 6, 20);
-        t->food[i].age = 0;
+        t->food[i].age = 0; t->food[i].floor_s = 0; t->food[i].nibbled = 0;
         n--;
     }
 }
@@ -1044,6 +1258,7 @@ void tank_tick_sleep(tank_t *t, float seconds) {
     coral_grow(t, seconds);
     cluster_grow(t, seconds);
     snail_sleep(t, seconds);
+    shrimp_sleep(t, seconds);
     /* film steps go through the same accumulator the awake tick uses: the
      * device drowses in 60 s slices (firmware DROWSE_TICK_US) and
      * (int)(30 / 120) is 0 - the truncation that had quietly stopped every
@@ -1435,22 +1650,72 @@ static void update_fish(tank_t *t, int idx, float dt) {
 
     /* urgency scales cruise speed a touch (0..9 → 0.8..1.25) */
     float ugain = 0.8f + f->goal.urgency * 0.05f;
+    /* a U-turn is a YAW (2026-09-29): a fish whose way lies behind it no longer
+     * loops over through vertical and rolls flat - it turns round where it is,
+     * toward the glass. (A YouTube viewer on the old roll: "that looks bad".)
+     * It swims on one SIDE (facing) and changes side only by a committed turn:
+     * the way must stay behind it for a moment - ~2 s hovering (3 at its
+     * spot), a third of a second cruising, at once when it matters (a dash,
+     * a startle, darting play) - and a turn is followed by ~1.3 s of settling. Until it commits
+     * it glances back (a part turn) and eases off, steering on its own side:
+     * the way mirrored across vertical, its climb or dive kept. Strato, the
+     * same night, on the first cut (a turn the moment the way fell behind):
+     * "too much time in a vertical position or flip flopping back and forth" -
+     * 21 flips a fish-minute, 34 at the bubble column, where the lane swings
+     * side to side every ~5 s. */
+    const float BEHIND_BAND  = 0.15f;    /* |cos| past vertical before the way is "behind" */
+    const float TURN_SETTLE  = 1.3f;     /* s after a turn before the next can begin */
+    if (!f->facing) f->facing = cosf(f->heading) < 0 ? -1 : 1;
+    bool urgent = agile || (t->ravenous && f->hunger > 6.5f) || (t->startled && touch_speed >= 55);
+    bool behind = cosf(desired) * f->facing < -BEHIND_BAND;
+    if (behind) f->behind += dt;
+    else f->behind = f->behind > 0 ? 0 : fminf(0, f->behind + dt);
+    /* hanging about its spot (the goal's point within ~30 px) a fish is in
+     * no hurry: the lane swinging past it is a glance, not a turn */
+    bool at_spot = tg.valid && tank_dist(f->x, f->y, tg.x, tg.y) < 30;
+    float commit = urgent ? 0 : lerpf(2.0f, 0.3f, clampf((f->speed - 10) * (1 / 25.0f), 0, 1)) + (at_spot ? 1.2f : 0);
+    if (behind && f->behind >= commit) {
+        f->facing = (int8_t)-f->facing;
+        f->heading = norm_ang(3.14159f - f->heading);   /* the climb or dive kept */
+        f->behind = urgent ? 0 : -TURN_SETTLE;
+    }
+    bool glancing = f->behind > 0;       /* the way is behind, the turn not yet committed */
+    if (cosf(desired) * f->facing < 0)   /* on its own side until it turns */
+        desired = atan2f(sinf(desired), f->facing * fabsf(cosf(desired)));
     float turn = clampf(norm_ang(desired - f->heading), -f->turn_rate * dt, f->turn_rate * dt);
     f->heading = norm_ang(f->heading + turn);
+    /* the yaw follows the side: a full turn in ~0.5 s at mira's turn rate
+     * (bolt 0.4, nori 0.7), quicker with urgency; a glance is 40% of one.
+     * The tail follows the head a beat behind */
+    float hc = cosf(f->heading);
+    float face = f->facing * (glancing ? 0.6f : 1.0f);
+    float yrate = f->turn_rate * 1.2f * (1 + f->goal.urgency * 0.06f) * dt;
+    f->yaw += clampf(face - f->yaw, -yrate, yrate);
+    f->yaw_tail += (f->yaw - f->yaw_tail) * clampf(dt * 10, 0, 1);
     float want = touch_speed >= 0 ? touch_speed : hes_speed >= 0 ? hes_speed : tg.speed * ugain;
-    f->target_speed = want * (f->energy < 1.2f ? 0.45f : 1);
+    f->target_speed = want * (f->energy < 1.2f ? 0.45f : 1) * (glancing ? 0.6f : 1);
     /* swimming through a canopy is slow going (a fleeing fish crashes through) */
     if (f->goal.id != GOAL_FLEE_SHADOW)
         for (int b = 0; b < tank_veg_beds(t); b++)
             if (veg_inside(t, b, f->x, f->y)) { f->target_speed *= VEG_SLOW; break; }
     f->speed = lerpf(f->speed, f->target_speed, clampf(dt * 2.6f, 0, 1));
-    f->x += cosf(f->heading) * f->speed * dt;
-    f->y += sinf(f->heading) * f->speed * dt + sinf(t->clock * 1.4f + f->wander) * dt * 1.7f;
+    /* the swim follows the facing: side-on it is the heading's own, and as
+     * the fish turns head-on its level travel crosses zero and it brakes to
+     * 40%. Only a LEVEL turn: steep, the heading steers as it always did (a
+     * diver's small corrections at the pellet don't wait on a flip) */
+    float ahc = fabsf(hc), w = clampf((ahc - 0.2f) * (1 / 0.4f), 0, 1);
+    float brake = 1 - 0.6f * (1 - fabsf(f->yaw)) * ahc * w;
+    f->x += (hc + (f->yaw * ahc - hc) * w) * f->speed * brake * dt;
+    f->y += sinf(f->heading) * f->speed * brake * dt + sinf(t->clock * 1.4f + f->wander) * dt * 1.7f;
 
-    /* hard bounds */
+    /* hard bounds. The side glass mirrors a heading only while it points
+     * INTO the glass: the facing lags the mirror, and a second bounce on the
+     * next frame would send the fish back into the glass */
     float m = 15 * f->size;
-    if (f->x < m)          { f->x = m;          f->heading = norm_ang(3.14159f - f->heading); }
-    if (f->x > TANK_W - m) { f->x = TANK_W - m; f->heading = norm_ang(3.14159f - f->heading); }
+    if (f->x < m)          { f->x = m;          if (cosf(f->heading) < 0) f->heading = norm_ang(3.14159f - f->heading);
+                                                if (f->facing < 0) { f->facing = 1; f->behind = -TURN_SETTLE; } }
+    if (f->x > TANK_W - m) { f->x = TANK_W - m; if (cosf(f->heading) > 0) f->heading = norm_ang(3.14159f - f->heading);
+                                                if (f->facing > 0) { f->facing = -1; f->behind = -TURN_SETTLE; } }
     if (f->y < m)          { f->y = m;          f->heading = -f->heading; }
     if (f->y > TANK_H - m) { f->y = TANK_H - m; f->heading = -f->heading; }
 
@@ -1507,11 +1772,11 @@ void tank_tick(tank_t *t, float dt, advisor_fn advise) {
         if (!p->alive) continue;
         live_food++;
         p->age += dt;
-        if (p->y < TANK_H - 14) {
+        if (p->y < FOOD_FLOOR_Y) {
             p->y += 8 * dt;
             p->x += sinf(p->age * 1.5f) * dt * 2;
-        }
-        if (p->age > 45) p->alive = false;
+        } else p->floor_s += dt;                        /* resting on the floor (FOOD_FLOOR_S) */
+        if (p->floor_s > 0 ? p->floor_s > FOOD_FLOOR_S : p->age > FOOD_LIFE_S) p->alive = false;
     }
     /* the tank's own trickle keeps fish alive when nobody is home (never
      * ruined by absence); the keeper's pellets are what progression counts.
@@ -1543,6 +1808,7 @@ void tank_tick(tank_t *t, float dt, advisor_fn advise) {
         tank_grow_algae(t, 1);
     }
     snail_tick(t, dt);
+    shrimp_tick(t, dt);
 
     /* bubbles rise */
     for (int i = 0; i < MAX_BUBBLE; i++) {

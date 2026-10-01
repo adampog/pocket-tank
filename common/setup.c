@@ -75,6 +75,10 @@ int setup_poll_birth(tank_t *t) {
     setup_begin_birth(t, nb);
     return nb;
 }
+bool setup_birth_due(void) {                               /* a welcome up, or owed and not yet offered */
+    int nb = progression_newborn();
+    return setup_is_birth() || (nb >= 0 && nb != s_birth_offered);
+}
 bool setup_active(void) { return s_active; }
 bool setup_is_birth(void) { return s_active && s_birth; }
 bool setup_is_place(void) { return s_active && s_place; }

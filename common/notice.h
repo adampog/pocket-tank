@@ -11,8 +11,14 @@
  *
  * One notice is up at a time for NOTICE_UP_S, or until a tap; the next
  * waits NOTICE_GAP_S. Nothing shows while `blocked` (setup / birth flow /
- * reset prompt up): the queue holds. Each notice carries the cue to play
- * when it comes up; the platform takes it with notice_take_cue. */
+ * reset prompt up, or a fry's welcome due - setup_birth_due):
+ * the queue holds, and a notice already up steps aside and comes back after
+ * (without its cue again). 2026-09-29, Strato: "the milestone achievement
+ * notification and the new fry welcome message overlap. the milestone should
+ * wait until the 'meet it' sequence is done" - the fry is born mid-frame and
+ * its population badge came up the frame before the flow opened.
+ * Each notice carries the cue to play when it comes up; the platform takes
+ * it with notice_take_cue. */
 #ifndef NOTICE_H
 #define NOTICE_H
 #include <stdbool.h>

@@ -176,6 +176,12 @@ static void enter_sleep_for(int wake_after_s) {
        turning the screen up can wake the tank (the CYD, no PMIC: no rails
        cycle around it, so the latch-up guard below has nothing to guard) */
     bool by_face = s_sleep_by_face; s_sleep_by_face = false;
+#if CONFIG_POCKET_TANK_IMU_FACE_DOWN_SLEEP
+    /* any sleep that starts face down - the gesture's, or BOOT pressed while
+       it lies there - wakes when it is turned face up. A BOOT sleep face up
+       keeps BOOT as its only wake: "not face down" would be true at once. */
+    if (!by_face && orientation_face_sleep() && imu_port_face_down_now() == 1) by_face = true;
+#endif
     int pct0 = battery_pct(), mv0 = battery_port_vbat_mv();
     int64_t grace_us = wake_after_s > 0 ? DIRECTOR_GRACE_US : SLEEP_GRACE_US;
     ESP_LOGI(TAG, "sleep: save, panel off, %d s grace then %s | battery %d%% %d mV",

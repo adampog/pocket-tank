@@ -546,21 +546,28 @@ esptool.py --chip esp32s3 -p <port> erase_flash
 tools/build_cyd.sh <port> --model
 ```
 
-**Gestures**, with an IMU fitted. The CYD has none on the board: an MPU-6050
-breakout on its I2C socket stands in until a QMI8658C arrives
-([docs/CYD.md](docs/CYD.md), *The IMU*). The first three are the AMOLED
-board's too.
+### Gestures
+
+The movement gestures need an IMU. The CYD has none on the board: an
+MPU-6050 breakout on its I2C socket stands in until a QMI8658C arrives
+([docs/CYD.md](docs/CYD.md), *The IMU*). Turning, holding still and handling
+are the AMOLED board's too; face down is the CYD's.
 
 | gesture | what the tank does |
 |---|---|
-| turn it upside down, about 0.75 s | the picture and touch turn 180 degrees to stay readable |
+| turn it upside down, about 0.75 s | the picture and touch turn 180 degrees to stay readable; turn it back and they follow |
 | lay it flat, or stand it on its side | nothing - it keeps the way it was, so it never flaps on a table |
 | pick it up, carry it | the sound stays warm, and holding it counts as attention for the tank light |
-| lay it screen down, still, 2 s (CYD) | it saves, darkens and sleeps, as a short press of BOOT |
-| turn it screen up within 20 minutes (CYD) | it wakes where it was, fish and all |
+| lay it screen down, level and still, 2 s | it saves, darkens and sleeps, as a short press of BOOT |
+| turn it screen up, or pick it up, within 20 minutes | it wakes where it was, fish and all - after any sleep that began face down |
+| short press of BOOT | sleeps the tank; within 20 minutes another press wakes it in place (face down or not), after that it boots |
+| hold BOOT and tap the glass | the *Reset tank?* prompt |
+| double-tap the glass | the tank light on or off (LIGHTS OUT: MANUAL, the default) |
 
-The settings page's FACE DOWN row (SLEEP / IGNORE) switches the last two off;
-it takes the place of the SCREEN row once an IMU answers.
+The settings page's FACE DOWN row (SLEEP / IGNORE) switches the face-down
+sleep and its wake off; it takes the place of the SCREEN row once an IMU
+answers. After 20 minutes asleep the board deep-sleeps, and only BOOT wakes
+it - waking on movement then would need the IMU's INT wire.
 
 Back up the factory image before the first flash
 (`esptool.py --chip esp32s3 -p <port> -b 921600 read_flash 0 0x1000000 factory_16MB.bin`)

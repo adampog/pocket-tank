@@ -168,17 +168,26 @@ either direction changed nothing, and a pick-up read MOVING.
 
 **Face down sleeps the tank** (`POCKET_TANK_IMU_FACE_DOWN_SLEEP`, on for the
 CYD). Screen down, level and still for 2 s is a short press of the sleep key:
-the tank saves, darkens and light-sleeps. The IMU stays awake through the
-20-minute grace - there are no rails to cycle on the CYD - and each 1 s wake
-of the grace reads it once: no longer face down (turned up, or picked up)
-resumes in place, as BOOT does. No answer from the IMU keeps it asleep. After
+the tank saves, darkens and light-sleeps. "Still" here is a motion count
+under 1000 a poll, not the handling detector's 220: a hand steadying the
+board reads 200-800, which kept the gesture from firing on the bench. **Any
+sleep that starts face down wakes when it is turned face up** - the
+gesture's, or BOOT pressed while it lies there; a BOOT sleep face up keeps
+BOOT as its only wake. For those the IMU stays awake through the 20-minute
+grace - there are no rails to cycle on the CYD - and each 1 s wake of the
+grace reads it once: no longer face down (turned up, or picked up) resumes
+in place, as BOOT does. No answer from the IMU keeps it asleep. After
 the grace the IMU sleeps and the board deep-sleeps; only BOOT wakes it then
 (motion could only with the INT wire). The gesture fires once per lie-down,
 so waking it with BOOT while it still lies face down does not put it straight
 back to sleep. Face down means the axis out of the glass reads more than
 0.5 g toward the table with both in-screen axes under 0.35 g; the sign that
 axis reads screen-up is `POCKET_TANK_IMU_MPU6050_OUT_NEGATIVE` (y for the
-mounting above: flat, screen up, Z reads -0.79 g).
+mounting above: flat, screen up, Z reads -0.79 g; screen down, +1.23 g).
+
+Bench, 2026-09-30, the breakout held flat against the back: face down slept
+the tank and face up woke it within a second; BOOT woke it and slept it again
+while it lay face down, and that BOOT sleep woke on face up too.
 
 **The settings page's SCREEN row becomes FACE DOWN, SLEEP / IGNORE, once an
 IMU answers.** The row was the keeper's way to turn the picture on a board

@@ -36,6 +36,11 @@
 #define FACE_THRESH        8192   /* 0.5 g */
 #define FACE_FLAT          5734   /* 0.35 g */
 #define IMU_FACE_HOLD_POLLS 8     /* 2 s at 4 Hz */
+/* still enough, for this purpose: a hand steadying the board reads 200-800
+ * a poll, which the handling detector's 220 would call moving; lifting it or
+ * carrying it reads thousands. Lying face down and level is itself most of
+ * the evidence. */
+#define FACE_STILL         1000   /* ~0.06 g */
 
 static const char *TAG = "imu";
 /* the chip that answered, through imu_chip.h. NULL = no IMU, and every
@@ -104,7 +109,7 @@ void imu_port_poll(int64_t now_us) {
     s_have_prev = true;
 #if CONFIG_POCKET_TANK_IMU_FACE_DOWN_SLEEP
     /* the face-down gesture: still and face down for 2 s, once per episode */
-    if (face_down(a) && s_motion <= MOTION_THRESH) {
+    if (face_down(a) && s_motion <= FACE_STILL) {
         if (++s_face_polls == IMU_FACE_HOLD_POLLS && s_face_armed) {
             s_face_fired = true; s_face_armed = false;
             ESP_LOGI(TAG, "face down and still for 2 s");

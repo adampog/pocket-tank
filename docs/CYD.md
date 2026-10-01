@@ -149,10 +149,42 @@ itself when it is fitted. The logic is one copy, in `imu_port.c`; each chip is
 a driver behind `imu_chip.h` (`imu_qmi8658.c`, `imu_mpu6050.c`). The AMOLED
 build has only the QMI8658 line, at the axes it always had.
 
+### Supported IMUs, and wiring one
+
+Either of these, on the CYD's I2C socket. The firmware probes the enabled
+ones at boot, in this order, and uses the first that answers:
+
+| chip | I2C address | WHO_AM_I | Kconfig line (CYD default) | notes |
+|---|---|---|---|---|
+| QMI8658 / QMI8658C | 0x6B, or 0x6A | 0x05 | `POCKET_TANK_IMU_QMI8658` (y) | the AMOLED board's chip; on the CYD its axes need one bench reading (*Still open*) |
+| MPU-6050 (GY-521 and the like) | 0x68 (AD0 low), or 0x69 | 0x68; clone dies reporting 0x70, 0x71, 0x72, 0x73 or 0x98 are taken too | `POCKET_TANK_IMU_MPU6050` (y) | what is fitted now; axes measured, in `sdkconfig.defaults.cyd` |
+
+Anything else on the bus is ignored; with neither answering, the boot log
+says so and the settings page keeps its SCREEN row.
+
+| IMU breakout | CYD | why |
+|---|---|---|
+| VCC | **3V3** | never 5 V: GPIO15 and GPIO16 are not 5 V tolerant, and some breakouts pull SDA and SCL up to their VCC |
+| GND | GND | |
+| SDA | **IO16** | the board's I2C bus, shared with the touch (0x38) and the codec (0x18), at 400 kHz |
+| SCL | **IO15** | |
+| INT | not connected | nothing polls it; a deep-sleep wake on movement would need it (*Still open*) |
+| AD0 / SA0 | as the breakout has it | picks between the two addresses above; both are probed |
+| XDA, XCL (MPU-6050) | not connected | its auxiliary bus, unused |
+
+The socket's pin order is not in the board's specification - read it off the
+silkscreen, or meter it against the touch controller's lines. No pull-up
+resistors were needed for the MPU-6050: the bus enables the chip's internal
+ones, and the GY-521 carries its own 4.7 k. A bare QMI8658C with none of its
+own may want a pair - check its breakout. **Mount it flat against the CYD's back**, so its Z axis
+is the one out of the glass; the up axis and both signs then come from one
+upright and one flat reading with the director's `imu`. Proof it is wired:
+the boot log's bus scan lists its address (`i2c: device at 0x68`), and
+`imu: MPU-6050 up at 0x68` (or `QMI8658 up at ...`) follows.
+
 **The MPU-6050**, a GY-521-style breakout:
 
-- wired to the I2C socket: SDA on IO16, SCL on IO15, VCC on 3V3, GND. It
-  answers at 0x68 (AD0 low) beside the touch and the codec, at 400 kHz.
+- wired as in the table above; it answers at 0x68 (AD0 low).
 - accel only at +-2 g, the QMI8658's scale (16384 counts per g), so every
   threshold carries over; a 10 Hz low-pass keeps a still table at a motion
   count of 6-92 against the 220 threshold; gyros in standby; its sleep bit for

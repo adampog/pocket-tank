@@ -580,9 +580,10 @@ tools/build_cyd.sh <port> --model
 
 ### Gestures
 
-The movement gestures need an IMU. The CYD has none on the board: an
-MPU-6050 breakout on its I2C socket stands in until a QMI8658C arrives
-([docs/CYD.md](docs/CYD.md), *The IMU*). Turning, holding still and handling
+The movement gestures need an IMU. The CYD has none on the board: a
+QMI8658 or an MPU-6050 breakout on its I2C socket (VCC 3V3, GND, SDA IO16,
+SCL IO15), detected at boot - which chips, and the wiring pin by pin, in
+[docs/CYD.md](docs/CYD.md), *Supported IMUs, and wiring one*. Turning, holding still and handling
 are the AMOLED board's too; face down is the CYD's.
 
 | gesture | what the tank does |

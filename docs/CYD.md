@@ -14,7 +14,7 @@ specification: [ES3C28P_ES2N28P_Specification_V1.0.pdf](https://www.lcdwiki.com/
 | Touch | FT3168 / CST816 | FT6336G (the FT5x06 family, I2C 0x38) |
 | Audio | ES8311 + NS4150B | ES8311 (I2C 0x18) + an amp enabled low on GPIO1 |
 | Power | AXP2101 PMIC, fuel gauge, PWR key | a charger for a LiPo on its socket; the cell's voltage on GPIO9; no PMIC |
-| Orientation | QMI8658 IMU | none - the SCREEN setting instead |
+| Orientation | QMI8658 IMU | none on the board; an MPU-6050 breakout on the I2C socket stands in (see *The IMU*), a QMI8658C to follow |
 | Clock | PCF85063 RTC | none |
 
 Pins: `firmware/main/board_pins.h`, from section 4.2 of the specification.
@@ -126,9 +126,66 @@ finger-landing correction made every miss land above its button, so it is
   that it deep-sleeps, and BOOT - or the director's timer - wakes it with a
   boot that puts the fish back and lives the time through (240 s asleep came
   back as 0.1 h).
-- On the I2C bus: 0x18 (the ES8311) and 0x38 (the FT6336). The AMOLED's
-  other parts are absent and say so at boot: no AXP2101, no QMI8658, no
-  PCF85063.
+- On the I2C bus: 0x18 (the ES8311), 0x38 (the FT6336) and, with the
+  breakout fitted, 0x68 (the MPU-6050). The AMOLED's other parts are absent
+  and say so at boot: no AXP2101, no QMI8658, no PCF85063.
+
+## The IMU
+
+The firmware's IMU work is all accelerometer, polled four times a second: the
+180-degree flip (held while the board lies flat or stands on its side, so it
+never flaps), and the handling detector (`moving` keeps the codec warm,
+`handled` counts as touching the tank for the light's idle rule). No gyro, no
+tap engine, no interrupt, so no INT wire is needed.
+
+**Each chip is a Kconfig line, and both are on for the CYD**
+(`sdkconfig.defaults.cyd`): `POCKET_TANK_IMU_QMI8658` and
+`POCKET_TANK_IMU_MPU6050`. At boot `imu_port_init` probes the enabled ones in
+that order and runs on the first that answers, so the QMI8658C takes over by
+itself when it is fitted. The logic is one copy, in `imu_port.c`; each chip is
+a driver behind `imu_chip.h` (`imu_qmi8658.c`, `imu_mpu6050.c`). The AMOLED
+build has only the QMI8658 line, at the axes it always had.
+
+**The MPU-6050**, a GY-521-style breakout:
+
+- wired to the I2C socket: SDA on IO16, SCL on IO15, VCC on 3V3, GND. It
+  answers at 0x68 (AD0 low) beside the touch and the codec, at 400 kHz.
+- accel only at +-2 g, the QMI8658's scale (16384 counts per g), so every
+  threshold carries over; a 10 Hz low-pass keeps a still table at a motion
+  count of 6-92 against the 220 threshold; gyros in standby; its sleep bit for
+  the drowse bracket.
+- **mounted flat against the CYD's back, its pins toward the top edge.** The
+  axes in `sdkconfig.defaults.cyd` are for that mounting, measured 2026-09-30:
+  upright reads X at -0.95 g, flat on its back reads Z (out of the glass). A
+  different mounting is one bench reading: stand the board upright, run the
+  director's `imu`, and the axis carrying ~16000 counts, with its sign, is
+  `POCKET_TANK_IMU_MPU6050_UP_AXIS` / `_UP_NEGATIVE`.
+- this breakout's Z reads about 0.79 g at rest. The flip never uses Z.
+
+Measured on the bench with the director's `imu` (2026-09-30): upside down
+flipped the picture 0.6 s later, back upright flipped it back, on its side in
+either direction changed nothing, and a pick-up read MOVING.
+
+**Face down sleeps the tank** (`POCKET_TANK_IMU_FACE_DOWN_SLEEP`, on for the
+CYD). Screen down, level and still for 2 s is a short press of the sleep key:
+the tank saves, darkens and light-sleeps. The IMU stays awake through the
+20-minute grace - there are no rails to cycle on the CYD - and each 1 s wake
+of the grace reads it once: no longer face down (turned up, or picked up)
+resumes in place, as BOOT does. No answer from the IMU keeps it asleep. After
+the grace the IMU sleeps and the board deep-sleeps; only BOOT wakes it then
+(motion could only with the INT wire). The gesture fires once per lie-down,
+so waking it with BOOT while it still lies face down does not put it straight
+back to sleep. Face down means the axis out of the glass reads more than
+0.5 g toward the table with both in-screen axes under 0.35 g; the sign that
+axis reads screen-up is `POCKET_TANK_IMU_MPU6050_OUT_NEGATIVE` (y for the
+mounting above: flat, screen up, Z reads -0.79 g).
+
+**The settings page's SCREEN row becomes FACE DOWN, SLEEP / IGNORE, once an
+IMU answers.** The row was the keeper's way to turn the picture on a board
+with no IMU; with one, the IMU turns it, so the row's place goes to the
+gesture's switch (SLEEP by default, kept in NVS as `tank/facedn`), and a
+SCREEN choice saved before is set aside. With no IMU the row is SCREEN, as
+before. The AMOLED's layout has no such row and is unchanged.
 
 ## Still open
 

@@ -11,4 +11,8 @@ void orientation_init(void);          /* after nvs_flash_init */
 bool orientation_flipped(void);
 void orientation_set(bool flipped);   /* saved */
 void orientation_save(void);          /* re-save after an NVS erase (reset) */
+/* the face-down gesture's switch (2026-09-30): screen down for 2 s sleeps the
+ * tank. On by default; kept beside the flip ("tank"/"facedn"). */
+bool orientation_face_sleep(void);
+void orientation_set_face_sleep(bool on);   /* saved */
 #endif

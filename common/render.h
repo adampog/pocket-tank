@@ -218,12 +218,17 @@ int  render_confirm_hit(float x, float y);
  * SET_TAP_IDLE (*value = the seconds now set), SET_TAP_CLOSE, or nothing.
  * render_settings_tap is the bare hit test (tests). */
 enum { SET_TAP_NONE = 0, SET_TAP_CLOSE = 1, SET_TAP_BRIGHT = 2, SET_TAP_VOLUME = 3, SET_TAP_LIGHT = 4, SET_TAP_IDLE = 5,
-       SET_TAP_FLIP = 6 };
+       SET_TAP_FLIP = 6, SET_TAP_FACE = 7 };
 /* The SCREEN row (UPRIGHT / FLIPPED), on a board with no IMU to turn the
  * picture itself - the CYD. SET_TAP_FLIP carries *value 1 = FLIPPED; the
  * platform turns the display and touch, keeps the choice, and says what it
  * is here so the row shows it. */
 void render_settings_set_flip(bool flipped);
+/* Once an IMU answers, it turns the picture itself and the SCREEN row has
+ * nothing to choose: the same row becomes FACE DOWN, SLEEP / IGNORE - the
+ * face-down gesture's switch. SET_TAP_FACE carries *value 1 = SLEEP. The
+ * platform says whether an IMU answered and what the switch is. */
+void render_settings_set_imu(bool imu, bool face_sleep);
 void render_settings(const tank_t *t, uint16_t *fb, int stride, int bright_pct, int volume);
 int  render_settings_tap(float x, float y, int *value);
 int  render_settings_touch(tank_t *t, float x, float y, bool down, int *value);

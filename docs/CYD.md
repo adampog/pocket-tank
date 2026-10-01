@@ -14,7 +14,8 @@ specification: [ES3C28P_ES2N28P_Specification_V1.0.pdf](https://www.lcdwiki.com/
 | Touch | FT3168 / CST816 | FT6336G (the FT5x06 family, I2C 0x38) |
 | Audio | ES8311 + NS4150B | ES8311 (I2C 0x18) + an amp enabled low on GPIO1 |
 | Power | AXP2101 PMIC, fuel gauge, PWR key | a charger for a LiPo on its socket; the cell's voltage on GPIO9; no PMIC |
-| Orientation | QMI8658 IMU | none on the board; an MPU-6050 breakout on the I2C socket stands in (see *The IMU*), a QMI8658C to follow |
+| IMU | QMI8658 (I2C 0x6B), on the board | none on the board: a QMI8658C or an MPU-6050 (0x68) on the I2C socket, SDA IO16 / SCL IO15, whichever answers at boot - an MPU-6050 now (see *The IMU*) |
+| Gestures | upside-down flip, handling (codec warm, the light's idle rule); the PWR key sleeps | the same, plus face down sleeps and face up wakes; BOOT is the sleep key (see *Gestures*) |
 | Clock | PCF85063 RTC | none |
 
 Pins: `firmware/main/board_pins.h`, from section 4.2 of the specification.

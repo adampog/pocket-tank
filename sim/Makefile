@@ -28,7 +28,7 @@ SDL_LIBS   := $(shell sdl2-config --libs)
 
 CFLAGS  := -O2 -std=c11 $(ARCH) $(SIZE) -I. -I../common -I../common/llm -DLV_CONF_INCLUDE_SIMPLE -DSOUNDS_BIN='"../assets/sounds/sounds.bin"' -DPT_VERSION='"$(shell git describe --always --dirty --exclude='*' 2>/dev/null || echo sim)"' $(SDL_CFLAGS) \
            -Wall -Wextra -Wno-unused-parameter -MMD -MP
-LDFLAGS := $(ARCH) $(SDL_LIBS) -lm
+LDFLAGS := $(ARCH) $(SDL_LIBS) -lm -lpthread
 
 APP_SRCS  := main.c advisor_llm.c persist_port_sim.c ../common/tank.c ../common/advisor.c ../common/render.c ../common/icons.c ../common/progression.c ../common/setup.c ../common/audio.c ../common/notice.c ../common/sounds.c ../common/battery.c ../common/llm/q4_model.c ../common/llm/word_tok.c ../common/llm/advisor_core.c
 

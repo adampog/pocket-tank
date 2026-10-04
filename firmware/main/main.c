@@ -57,7 +57,7 @@
 static bool s_pmic;                        /* an AXP2101 answered: the PWR key exists, power-off is real */
 static bool s_imu;                         /* an IMU answered: it turns the picture (and, on the CYD, the face-down gesture) */
 static bool s_sleep_by_face;               /* the next sleep was the face-down gesture: face up wakes it */
-#if defined(CONFIG_POCKET_TANK_DISPLAY_SH8601) || defined(CONFIG_POCKET_TANK_DISPLAY_ILI9341)
+#if defined(CONFIG_POCKET_TANK_DISPLAY_SH8601) || defined(CONFIG_POCKET_TANK_DISPLAY_ILI9341) || defined(CONFIG_POCKET_TANK_DISPLAY_ST7789)
 extern i2c_master_bus_handle_t board_i2c_bus(void);
 #else
 static i2c_master_bus_handle_t board_i2c_bus(void) { return NULL; }
@@ -463,8 +463,10 @@ static void tank_task(void *arg) {
         /* with an IMU answering, the IMU turns the picture and the settings
            row is FACE DOWN, not SCREEN: a saved SCREEN choice is set aside */
         bool inv = s_imu ? imu_port_inverted() : orientation_flipped();
-#else
+#elif CONFIG_POCKET_TANK_IMU_AUTO_FLIP
         bool inv = imu_port_inverted() != orientation_flipped();   /* the IMU's flip, turned again by the keeper's SCREEN choice */
+#else
+        bool inv = orientation_flipped();   /* no auto-flip: the keeper's SCREEN choice alone (the IMU still senses handling) */
 #endif
         display_port_set_inverted(inv);   /* per-frame, so a flip lands between flushes */
         touch_port_set_inverted(inv);

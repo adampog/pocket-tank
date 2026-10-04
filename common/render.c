@@ -3068,8 +3068,9 @@ void render_sd_toast(const tank_t *t, uint16_t *fb, int stride) {
  * (MANUAL, the default = the double-tap on the glass; AUTO = the idle rule,
  * the keeper's opt-in) with the idle time under it as one number: swipe it
  * up or down, or tap the chevrons; the default is LIGHT_IDLE_S. */
-/* A SCREEN row (UPRIGHT / FLIPPED) on a board with no IMU to turn the
- * picture by itself - the CYD, the only compact board (render_settings_set_flip). */
+/* A SCREEN row (UPRIGHT / FLIPPED) on the compact boards: the CYD has no IMU
+ * to turn the picture by itself, and on the Touch-LCD-2 it turns the IMU's
+ * flip once more (render_settings_set_flip). */
 #define SET_HAS_FLIP  UI_COMPACT
 #if UI_COMPACT
 #define SET_TITLE_Y   6

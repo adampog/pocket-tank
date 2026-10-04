@@ -21,12 +21,13 @@
 #include <stdint.h>
 
 /* The tank's size in pixels, landscape. The Waveshare AMOLED's 448 x 368 unless
- * the board says otherwise: the 2.8" CYD (ES3C28P, CONFIG_POCKET_TANK_BOARD_CYD28)
- * is 320 x 240, and the sim takes -DTANK_W / -DTANK_H to preview it.
+ * the board says otherwise: the 2.8" CYD (ES3C28P) and the Waveshare
+ * ESP32-S3-Touch-LCD-2 are 320 x 240 (CONFIG_POCKET_TANK_TANK_320X240), and the
+ * sim takes -DTANK_W / -DTANK_H to preview it.
  * Everything in common/ is laid out against these two. */
 #ifdef ESP_PLATFORM
 #include "sdkconfig.h"
-#if CONFIG_POCKET_TANK_BOARD_CYD28
+#if CONFIG_POCKET_TANK_TANK_320X240
 #define TANK_W 320
 #define TANK_H 240
 #endif

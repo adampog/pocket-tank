@@ -53,9 +53,10 @@ static bool s_inverted;                           /* screen 180-flipped: mirror 
  * same reason; Strato saw it on the swatch rows, 2026-09-13). Reported
  * points move UP by this many px in displayed space; director `touch bias
  * <px>` tunes it live. */
-#if CONFIG_POCKET_TANK_BOARD_CYD28
+#if CONFIG_POCKET_TANK_TANK_320X240
 /* None on the CYD (2026-09-26): with the AMOLED's 10 px every missed button
- * in the first setup walk-through read ABOVE the button, never below it. */
+ * in the first setup walk-through read ABOVE the button, never below it.
+ * The Touch-LCD-2 is the same size of glass and starts from the same 0. */
 static int s_bias_y = 0;
 #else
 static int s_bias_y = 10;
@@ -77,6 +78,7 @@ extern bool board_is_v2(void);
 #define TOUCH_SWAP_XY  1
 #define TOUCH_MIRROR_X 0
 #define TOUCH_MIRROR_Y 1
+#define TOUCH_TURN_180 1
 
 bool touch_port_init(void) {
     esp_lcd_panel_io_handle_t io;
@@ -88,6 +90,31 @@ bool touch_port_init(void) {
         .flags = { .swap_xy = TOUCH_SWAP_XY, .mirror_x = TOUCH_MIRROR_X, .mirror_y = TOUCH_MIRROR_Y } };
     if (esp_lcd_touch_new_i2c_ft5x06(io, &tp_cfg, &s_tp) != ESP_OK) { ESP_LOGW(TAG, "no FT6336"); return false; }
     ESP_LOGI(TAG, "FT6336 ready");
+    return true;
+}
+#elif CONFIG_POCKET_TANK_BOARD_TLCD2
+/* The Touch-LCD-2's CST816D (the CST816S driver's register set, as on the
+ * AMOLED's V2 board) on the shared bus, reporting in the panel's portrait
+ * frame. The driver mirrors first, then swaps: x = raw y, y = 239 - raw x,
+ * which is Waveshare's factory app's own mapping for the landscape it scans
+ * (board_pins.h LCD_*: MX | MV). x_max / y_max are the last pixel, so the
+ * mirror lands on 239, not 240. Check against the "press at" log line: a tap
+ * near the top-left corner reads near 0,0. */
+#define TOUCH_SWAP_XY  1
+#define TOUCH_MIRROR_X 1
+#define TOUCH_MIRROR_Y 0
+#define TOUCH_TURN_180 0
+
+bool touch_port_init(void) {
+    esp_lcd_panel_io_handle_t io;
+    esp_lcd_panel_io_i2c_config_t io_cfg = ESP_LCD_TOUCH_IO_I2C_CST816S_CONFIG();
+    io_cfg.dev_addr = I2C_ADDR_CST816D; io_cfg.scl_speed_hz = 400000;
+    if (esp_lcd_new_panel_io_i2c(board_i2c_bus(), &io_cfg, &io) != ESP_OK) { ESP_LOGW(TAG, "no touch io"); return false; }
+    esp_lcd_touch_config_t tp_cfg = { .x_max = PANEL_W - 1, .y_max = PANEL_H - 1, .rst_gpio_num = PIN_TP_RST, .int_gpio_num = -1,
+        .levels = { .reset = 0, .interrupt = 0 },
+        .flags = { .swap_xy = TOUCH_SWAP_XY, .mirror_x = TOUCH_MIRROR_X, .mirror_y = TOUCH_MIRROR_Y } };
+    if (esp_lcd_touch_new_i2c_cst816s(io, &tp_cfg, &s_tp) != ESP_OK) { ESP_LOGW(TAG, "no CST816D"); return false; }
+    ESP_LOGI(TAG, "CST816D ready");
     return true;
 }
 #else
@@ -116,11 +143,12 @@ void touch_port_poll(tank_t *t) {
     uint16_t x[1], y[1], st[1]; uint8_t n = 0;
     esp_lcd_touch_read_data(s_tp);
     bool touched = esp_lcd_touch_get_coordinates(s_tp, x, y, st, &n, 1) && n > 0;
-#if CONFIG_POCKET_TANK_BOARD_CYD28
-    /* landscape from the driver, turned 180 degrees (see touch_port_init); a
-       flipped screen undoes the turn */
-    float tx = touched ? (s_inverted ? (float)x[0] : (float)(TANK_W - 1 - x[0])) : s_lx;
-    float ty = touched ? (s_inverted ? (float)y[0] : (float)(TANK_H - 1 - y[0])) - s_bias_y : s_ly;
+#if CONFIG_POCKET_TANK_TANK_320X240
+    /* landscape from the driver, turned 180 degrees where the bench found it
+       (TOUCH_TURN_180, see touch_port_init); a flipped screen toggles the turn */
+    bool turn = TOUCH_TURN_180 ^ s_inverted;
+    float tx = touched ? (turn ? (float)(TANK_W - 1 - x[0]) : (float)x[0]) : s_lx;
+    float ty = touched ? (turn ? (float)(TANK_H - 1 - y[0]) : (float)y[0]) - s_bias_y : s_ly;
 #else
     /* portrait panel (px,py) -> landscape tank (tx,ty): tx = TANK_W-1-py, ty = px;
      * flipped screen: mirror both, so downstream gestures live in displayed space */

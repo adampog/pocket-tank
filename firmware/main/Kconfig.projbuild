@@ -9,10 +9,22 @@ menu "pocket-tank"
             bool "Waveshare ESP32-S3-Touch-AMOLED-1.8 (448x368)"
         config POCKET_TANK_BOARD_CYD28
             bool "2.8in ESP32-S3 CYD, ES3C28P: ILI9341 + FT6336 (320x240)"
+        config POCKET_TANK_BOARD_TLCD2
+            bool "Waveshare ESP32-S3-Touch-LCD-2: ST7789T3 + CST816D (320x240)"
     endchoice
+    config POCKET_TANK_TANK_320X240
+        bool
+        default y if POCKET_TANK_BOARD_CYD28 || POCKET_TANK_BOARD_TLCD2
+        help
+            The small landscape boards: common/tank.h lays the tank out at
+            320x240, and touch arrives already landscape from the driver.
     config POCKET_TANK_DISPLAY_ILI9341
         bool "Drive the CYD's ILI9341 over SPI, backlight PWM on GPIO45"
         depends on POCKET_TANK_BOARD_CYD28
+        default n
+    config POCKET_TANK_DISPLAY_ST7789
+        bool "Drive the Touch-LCD-2's ST7789T3 over SPI, backlight PWM"
+        depends on POCKET_TANK_BOARD_TLCD2
         default n
     config POCKET_TANK_DISPLAY_SH8601
         bool "Drive the Waveshare 1.8in AMOLED (SH8601 / CO5300 over QSPI)"
@@ -95,6 +107,15 @@ menu "pocket-tank"
         help
             Only the face-down gesture uses it: lying screen down reads the
             other sign.
+    config POCKET_TANK_IMU_AUTO_FLIP
+        bool "The IMU turns the picture over when the board is turned over"
+        default y
+        depends on (POCKET_TANK_IMU_QMI8658 || POCKET_TANK_IMU_MPU6050) && !POCKET_TANK_IMU_FACE_DOWN_SLEEP
+        help
+            Off: the IMU only senses handling (the tank light, the codec's
+            warm-up), and the settings page's SCREEN row alone says which
+            way up the picture is. The face-down gesture's builds always
+            let the IMU turn the picture.
     config POCKET_TANK_IMU_FACE_DOWN_SLEEP
         bool "Face down sleeps the tank, face up wakes it (a settings toggle)"
         default y if POCKET_TANK_BOARD_CYD28

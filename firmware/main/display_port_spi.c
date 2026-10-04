@@ -1,45 +1,45 @@
-/* display_port_ili9341.c — the 2.8" ESP32-S3 CYD (ES3C28P): ILI9341V over
- * 4-wire SPI via esp_lcd, 240x320 portrait glass scanned as landscape 320x240.
+/* display_port_spi.c — a 240x320 portrait SPI LCD scanned as landscape 320x240,
+ * via esp_lcd over 4-wire SPI:
+ *   - the 2.8" ESP32-S3 CYD (ES3C28P): ILI9341V (CONFIG_POCKET_TANK_DISPLAY_ILI9341)
+ *   - the Waveshare ESP32-S3-Touch-LCD-2: ST7789T3 (CONFIG_POCKET_TANK_DISPLAY_ST7789)
+ * The pins and the bench facts of how each glass is mounted (LCD_SWAP_XY,
+ * LCD_MIRROR_*, LCD_BGR, LCD_INVERT, LCD_PCLK_HZ) live in board_pins.h.
  *
- * Unlike the AMOLED port there is no software transpose: the ILI9341 turns
+ * Unlike the AMOLED port there is no software transpose: the controller turns
  * its own scan through MADCTL (esp_lcd's swap_xy / mirror), so a landscape
  * frame goes out row by row, only byte-swapped (RGB565 is big-endian on the
  * wire). The 180-degree flip is the same register with both mirrors toggled.
- * Brightness is the backlight's PWM duty on GPIO45 (LEDC); the panel itself
- * has no brightness command worth using.
+ * Brightness is the backlight's PWM duty (LEDC); neither panel has a
+ * brightness command worth using.
  *
- * This port also owns the board's I2C bus (touch, codec, the I2C socket), as
- * the AMOLED port does - board_i2c_bus() is how everything else reaches it. */
+ * This port also owns the board's I2C bus (touch, codec, IMU, the I2C socket),
+ * as the AMOLED port does - board_i2c_bus() is how everything else reaches it. */
 #include "display_port.h"
 #include "board_pins.h"
 #include "tank.h"
 #include "driver/spi_master.h"
 #include "driver/i2c_master.h"
+#include "driver/gpio.h"
 #include "driver/ledc.h"
 #include "esp_lcd_panel_io.h"
 #include "esp_lcd_panel_ops.h"
+#if CONFIG_POCKET_TANK_DISPLAY_ST7789
+#include "esp_lcd_panel_vendor.h"               /* esp_lcd_new_panel_st7789, part of esp_lcd itself */
+#define new_panel esp_lcd_new_panel_st7789
+static const char *TAG = "st7789";
+#else
 #include "esp_lcd_ili9341.h"
+#define new_panel esp_lcd_new_panel_ili9341
+static const char *TAG = "ili9341";
+#endif
 #include "esp_log.h"
 #include "esp_heap_caps.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 #include <string.h>
 
-static const char *TAG = "ili9341";
 #define LCD_HOST    SPI2_HOST
 #define STRIPE_ROWS 20                          /* tank rows per DMA transfer: 320 x 20 x 2 = 12.8 KB */
-/* 40 MHz is inside what every ILI9341 clone takes for writes; 80 is worth a
- * try on the bench once the picture is right (a frame is 30 ms at 40). */
-#define LCD_PCLK_HZ (40 * 1000 * 1000)
-
-/* How the glass is mounted, found on the bench. swap_xy turns the portrait
- * panel landscape; the two mirrors pick which corner is the origin. The
- * colour order and inversion are the two other things CYD clones differ in. */
-#define LCD_SWAP_XY   true
-#define LCD_MIRROR_X  false
-#define LCD_MIRROR_Y  false
-#define LCD_BGR       true
-#define LCD_INVERT    true                      /* IPS ILI9341V panels want inversion on */
 
 #define BL_TIMER   LEDC_TIMER_0
 #define BL_CHANNEL LEDC_CHANNEL_0
@@ -92,6 +92,12 @@ bool display_port_init(void) {
         if (i2c_master_probe(s_i2c, address, 20) == ESP_OK) ESP_LOGI(TAG, "i2c: device at 0x%02X", address);
 
     backlight_init();                               /* dark until the first frame is in */
+#ifdef PIN_SD_CS
+    /* the TF card shares the LCD's SPI lines: hold its select high so the
+       card never answers a panel transfer */
+    gpio_set_direction(PIN_SD_CS, GPIO_MODE_OUTPUT);
+    gpio_set_level(PIN_SD_CS, 1);
+#endif
 
     for (int i = 0; i < 2; i++) {
         s_stripe[i] = heap_caps_malloc(TANK_W * STRIPE_ROWS * 2, MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL);
@@ -107,10 +113,10 @@ bool display_port_init(void) {
         .spi_mode = 0, .pclk_hz = LCD_PCLK_HZ, .trans_queue_depth = 4, .on_color_trans_done = on_trans_done,
         .lcd_cmd_bits = 8, .lcd_param_bits = 8 };
     ESP_ERROR_CHECK(esp_lcd_new_panel_io_spi((esp_lcd_spi_bus_handle_t)LCD_HOST, &io_cfg, &io));
-    const esp_lcd_panel_dev_config_t pcfg = { .reset_gpio_num = -1,
+    const esp_lcd_panel_dev_config_t pcfg = { .reset_gpio_num = PIN_LCD_RST,
         .rgb_ele_order = LCD_BGR ? LCD_RGB_ELEMENT_ORDER_BGR : LCD_RGB_ELEMENT_ORDER_RGB, .bits_per_pixel = 16 };
-    ESP_ERROR_CHECK(esp_lcd_new_panel_ili9341(io, &pcfg, &s_panel));
-    ESP_ERROR_CHECK(esp_lcd_panel_reset(s_panel));  /* no reset pin: the driver sends the software reset */
+    ESP_ERROR_CHECK(new_panel(io, &pcfg, &s_panel));
+    ESP_ERROR_CHECK(esp_lcd_panel_reset(s_panel));  /* no reset pin (-1): the driver sends the software reset */
     ESP_ERROR_CHECK(esp_lcd_panel_init(s_panel));
     esp_lcd_panel_invert_color(s_panel, LCD_INVERT);
     apply_orientation();

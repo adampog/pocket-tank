@@ -254,7 +254,7 @@ void render_button(uint16_t *fb, int stride, int x, int y, int w, int h, uint32_
 /* an adult fish facing right at (x,y), body length ~42 x size px, tail
  * swimming on `clock` - the setup's live preview of a colour choice */
 void render_fish_preview(uint16_t *fb, int stride, float x, float y, float size,
-                         uint32_t body, uint32_t fin, uint32_t accent, float clock);
+                         uint32_t body, uint32_t fin, uint32_t accent, uint8_t style, float clock);
 /* the same, but AS THE FISH IS: its own stage (a fry shows no markings yet,
  * an elder its long tail), calm and fed - the birth flow's portrait */
 void render_fish_portrait(uint16_t *fb, int stride, float x, float y, float size, const fish_t *who, float clock);

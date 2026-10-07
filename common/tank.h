@@ -154,11 +154,25 @@ enum {
     TMS_COUNT = 11
 };
 
+/* fish body style (fish-graphics mission): a preset's cartoon look, carried
+ * onto the fish exactly like color/fin/accent (tank.c ROSTER). Style 0 is the
+ * original silhouette; draw_fish_core (render.c) branches on it. Styles 2..6
+ * are reserved for later slices (Classic Cartoon, Fancy Guppy, Pixel Chunk,
+ * Round Bubble, Flat Modern) - not implemented yet. Derived from preset, never
+ * persisted: a loaded save rebuilds each fish via tank_make_fish, so old saves
+ * default to their preset's style. */
+enum {
+    FISH_STYLE_CLASSIC       = 0,   /* the original flat silhouette (all presets but mira, this slice) */
+    FISH_STYLE_CHUBBY_PEBBLE = 1,   /* fat round kawaii body, big eye, cheek blush, little smile (mira) */
+};
+
 typedef struct {
     char   name[FISH_NAME_MAX + 1]; /* display name: the roster preset's until the
                                      * keeper renames it (setup.c); saved per fish */
     const char *model_name; /* one of TRAINED_NAMES: the token the v2 model sees */
     int    preset;          /* roster index (colors, base size, temperament) */
+    uint8_t style;          /* FISH_STYLE_*: the preset's cartoon look (render only,
+                             * derived from preset, not saved) */
     float x, y;
     float heading;          /* radians */
     float yaw;              /* which way it faces, -1 (left) .. +1 (right), seen

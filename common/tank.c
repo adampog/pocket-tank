@@ -82,15 +82,19 @@ int tank_nearest_friend(const tank_t *t, int fish_idx, float *dist_out) {
 typedef struct {
     const char *name; uint32_t color, fin, accent;
     float size, curiosity, lazy, turn_rate;
+    uint8_t style;          /* FISH_STYLE_* (tank.h): the preset's cartoon look */
 } preset_t;
+/* style per preset (fish-graphics): only mira is styled this slice (Chubby
+ * Pebble); the other five stay FISH_STYLE_CLASSIC until Alan reviews mira and
+ * their styles (2..6) are shaped. */
 static const preset_t ROSTER[] = {
-    /* name    color     fin       accent    size  cur  lazy  turn */
-    { "mira", 0x38dcc7, 0x1d9f98, 0xffbd59, 1.08f, 7.5f, 0.2f, 3.2f },
-    { "bolt", 0xff725c, 0xb83a43, 0xffe08a, 0.94f, 6.0f, 0.2f, 4.2f },
-    { "kelp", 0x78d67d, 0x3f8b55, 0xa799ff, 0.86f, 4.0f, 0.1f, 3.2f },
-    { "nori", 0xa799ff, 0x6b5ed6, 0x78d67d, 1.00f, 5.0f, 0.7f, 2.4f },
-    { "pip",  0xffd166, 0xc98a1e, 0x38dcc7, 0.90f, 6.5f, 0.3f, 3.8f },
-    { "sol",  0xf48fb1, 0xb0456f, 0xffe08a, 1.04f, 5.5f, 0.4f, 2.9f },
+    /* name    color     fin       accent    size  cur  lazy  turn  style */
+    { "mira", 0x38dcc7, 0x1d9f98, 0xffbd59, 1.08f, 7.5f, 0.2f, 3.2f, FISH_STYLE_CHUBBY_PEBBLE },
+    { "bolt", 0xff725c, 0xb83a43, 0xffe08a, 0.94f, 6.0f, 0.2f, 4.2f, FISH_STYLE_CLASSIC },
+    { "kelp", 0x78d67d, 0x3f8b55, 0xa799ff, 0.86f, 4.0f, 0.1f, 3.2f, FISH_STYLE_CLASSIC },
+    { "nori", 0xa799ff, 0x6b5ed6, 0x78d67d, 1.00f, 5.0f, 0.7f, 2.4f, FISH_STYLE_CLASSIC },
+    { "pip",  0xffd166, 0xc98a1e, 0x38dcc7, 0.90f, 6.5f, 0.3f, 3.8f, FISH_STYLE_CLASSIC },
+    { "sol",  0xf48fb1, 0xb0456f, 0xffe08a, 1.04f, 5.5f, 0.4f, 2.9f, FISH_STYLE_CLASSIC },
 };
 #define ROSTER_N ((int)(sizeof ROSTER / sizeof ROSTER[0]))
 int tank_roster_count(void) { return ROSTER_N; }
@@ -174,6 +178,7 @@ void tank_make_fish(tank_t *t, int slot, int preset, float sociable, float bold,
     f->rest_dx = 8 + slot * 24 + bold * 14; f->rest_dy = -slot * 9 - tank_randf(t, 0, 10);   /* a body apart (was 9 px per slot) */
     f->sig = 0xffffffffu; f->ms_bits = 0; f->ms_seen = 0;
     f->color = p->color; f->fin = p->fin; f->accent = p->accent;
+    f->style = p->style;                              /* rides with the preset, like the colours */
     f->parent_a = f->parent_b = -1;
 }
 

@@ -547,6 +547,60 @@ static void draw_fish_core(ctx_t *c, const fish_t *f, float clock, bool asleep, 
                 fill_ellipse(c, TX(12, 1.7f), TY(12, 1.7f), 2.2f * f->size, 1.2f * f->size, body, 255);
             }
         }
+    } else if (f->style == FISH_STYLE_PIXEL_CHUNK) {
+        /* Pixel Chunk (pip, fish-graphics slice 05): crisp retro pixel art - a
+         * blocky body and tail built from a few chunky rectangles, a square
+         * pixel eye, a blocky mouth and a stepped accent block. The renderer's
+         * fills are already hard-edged (no AA), so the blocks read crisp.
+         *
+         * YAW/PITCH (the documented choice): every block is a rectangle in
+         * BODY-LOCAL space taken through TX/TY, exactly like every other style.
+         * So the whole fish foreshortens on a turn and tilts on a climb/dive,
+         * and the square eye rides lx>0 (the head, leading/left). We do NOT
+         * snap the blocks to screen pixels: a fixed screen grid would ignore
+         * yaw/pitch (the slice-02 screen-aligned bug) and freeze the eye off
+         * the head mid-turn. The "pixel" character is the chunky rectilinear
+         * geometry, not a fixed pixel lattice - so it stays coherent and cheap
+         * (a handful of quads, no per-pixel work, no heap). */
+        uint32_t ink = mix(fin, 0x1a1200, 0.55f);        /* the dark pixel ink (eye/mouth) */
+#define QUAD(x0,y0,x1,y1,col) do { \
+        float _qx[4] = { TX((x0),(y0)), TX((x1),(y0)), TX((x1),(y1)), TX((x0),(y1)) }; \
+        float _qy[4] = { TY((x0),(y0)), TY((x1),(y0)), TY((x1),(y1)), TY((x0),(y1)) }; \
+        fill_poly(c, _qx, _qy, 4, (col)); } while (0)
+
+        /* blocky tail: an inner block + a narrower outer block, flapping as a
+         * chunky step with the swim phase; longer for an elder (tail_len) */
+        {
+            float f1 = 6.0f + tail * 4.0f, f2 = 3.0f + tail * 3.0f;
+            QUAD(-24 * tail_len, -f1, -13, f1, fin);
+            QUAD(-29 * tail_len, -f2, -24 * tail_len, f2, fin);
+        }
+        /* blocky dorsal (grown): a chunky block on the back, taller for elders */
+        if (grown) { float h = elder ? -16 : -14; QUAD(-3, h, 6, -9, fin); }
+        /* the chunky body: a wide core block, a back hump and a belly block,
+         * plus a small nose block - a tidy stepped silhouette */
+        QUAD(-16, -6, 14, 6, body);
+        QUAD(-12, -10, 8, -6, body);
+        QUAD(-12, 6, 8, 10, body);
+        QUAD(13, -3, 17, 3, body);
+        /* a stepped accent "pixel stripe" on the flank: two chunky accent
+         * blocks, shown only while the flank faces us (a hard yaw gate, so the
+         * blocks stay crisp instead of alpha-fading) and skipped on a fry */
+        if (f->stage >= STAGE_JUV && fabsf(yaw_at(yh, yt, -1)) > 0.45f) {
+            QUAD(-4, -4, -1, 1, f->accent);
+            QUAD(-1, 0, 2, 5, f->accent);
+        }
+        /* the square pixel eye on the head: a dark block with a white highlight
+         * block; a thin lid block when asleep */
+        if (asleep) {
+            QUAD(7, -3.5f, 11, -2.0f, 0x9fb4b8);
+        } else {
+            QUAD(7, -5, 11, -1, ink);
+            QUAD(7, -5, 9, -3, 0xffffff);                /* the white highlight pixel */
+        }
+        /* a tiny blocky mouth near the nose, hidden asleep */
+        if (!asleep) QUAD(12, 2.2f, 15, 4.0f, ink);
+#undef QUAD
     } else {
     /* tail fin (triangle, flaps with tail phase) */
     {

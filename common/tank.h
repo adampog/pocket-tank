@@ -166,7 +166,8 @@ enum {
     FISH_STYLE_CHUBBY_PEBBLE  = 1,  /* fat round kawaii body, big eye, cheek blush, little smile (mira) */
     FISH_STYLE_CLASSIC_CARTOON = 2, /* clean almond, Nemo-style white side stripes, big eye, smile (bolt) */
     FISH_STYLE_FANCY_GUPPY    = 3,  /* slim body, long flowing dorsal + tail, shimmer spots (nori) */
-    /* 4 Pixel Chunk, 5 Round Bubble reserved for later slices */
+    FISH_STYLE_PIXEL_CHUNK    = 4,  /* crisp retro pixel art: blocky body/tail, square eye (pip) */
+    /* 5 Round Bubble reserved for a later slice */
     FISH_STYLE_FLAT_MODERN    = 6,  /* bold flat vector, thick dark outline, two-tone belly, spots (kelp) */
 };
 

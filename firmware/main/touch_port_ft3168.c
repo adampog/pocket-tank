@@ -68,9 +68,14 @@ void touch_port_set_inverted(bool inverted) { s_inverted = inverted; }
 extern i2c_master_bus_handle_t board_i2c_bus(void);
 extern bool board_is_v2(void);
 
-#if CONFIG_POCKET_TANK_BOARD_CYD28
-/* The CYD's FT6336G (the same FT5x06 register family) on the shared bus, with
- * its reset on GPIO18. The driver's swap_xy turns its portrait report
+#if CONFIG_POCKET_TANK_BOARD_CYD28 || CONFIG_POCKET_TANK_BOARD_CORES3
+/* The CYD's FT6336G, and the CoreS3's FT6336 at the same 0x38 (both the FT5x06
+ * register family): the CoreS3 rides this path for now so the build links with
+ * the right touch driver. Its real bring-up (the internal 12/11 bus, the
+ * AW9523B INT at GPIO21, PIN_TP_RST via the expander) is a later slice; here
+ * PIN_TP_RST is -1, so the shared init just needs it to compile.
+ * The CYD's FT6336G (the same FT5x06 register family) on the shared bus, with
+ * its reset on GPIO18 (CoreS3: -1). The driver's swap_xy turns its portrait report
  * landscape; what is left for touch_port_poll is a 180-degree turn, found on
  * the bench (2026-09-26): a drag to the right moved the bubble column left,
  * and the welcome page's NEXT, at the foot, answered a tap at the top. The

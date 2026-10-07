@@ -75,6 +75,41 @@
 #define PIN_BAT_ADC       5        /* ADC1_CH4: VBAT through 200K / 100K, so x3 */
 #define PANEL_W           240      /* native portrait; the panel scans landscape (MADCTL) */
 #define PANEL_H           320
+#elif CONFIG_POCKET_TANK_BOARD_CORES3
+/* The M5Stack CoreS3 (M5GFX 0.2.32 / M5Unified 0.2.25, in
+ * ~/Projects/firmware/.pio/libdeps/m5stack-cores3/, and the mission brief). An
+ * ILI9342C 320x240 IPS over SPI - register-compatible with the ILI9341 init,
+ * so it rides display_port_spi.c. D/C and MISO SHARE GPIO35; the panel is used
+ * write-only, so there is no MISO. The backlight is AXP2101 DLDO1 (not a PWM
+ * GPIO) and the LCD reset is AW9523B P1_1 - both driven by the PMIC/expander
+ * bring-up (slice 02), so there is no reset or backlight GPIO here. Internal
+ * I2C (touch, PMIC, expander) is SDA GPIO12 / SCL GPIO11. */
+#define PIN_LCD_CS        3
+#define PIN_LCD_DC        35       /* high = data, low = command (shares GPIO35 with the unused MISO) */
+#define PIN_LCD_SCLK      36
+#define PIN_LCD_MOSI      37
+#define PIN_LCD_MISO      -1       /* write-only: the panel never reads back (D/C owns GPIO35) */
+#define PIN_LCD_BL        -1       /* AXP2101 DLDO1, not a GPIO - driven in the bring-up slice */
+#define PIN_LCD_RST       -1       /* AW9523B P1_1, not a GPIO - driven in the bring-up slice */
+#define PIN_SD_CS         4        /* TF card CS: held high so the card stays off the panel's bus */
+/* PROVISIONAL landscape (ILI9341-family defaults; M5GFX drives the real
+ * ILI9342C rotation=1). The exact MADCTL / colour order are verified on the
+ * bench in the bring-up slice - this slice only has to configure and build. */
+#define LCD_PCLK_HZ       (40 * 1000 * 1000)
+#define LCD_SWAP_XY       true
+#define LCD_MIRROR_X      false
+#define LCD_MIRROR_Y      false
+#define LCD_BGR           true
+#define LCD_INVERT        true     /* the IPS panel wants inversion on (brief) */
+#define PIN_I2C_SDA       12       /* internal bus: touch (FT6336), AXP2101, AW9523B */
+#define PIN_I2C_SCL       11
+#define PIN_TP_RST        -1       /* touch reset is via the AW9523B (bring-up slice) */
+#define PIN_TP_INT        -1       /* INT routes through the AW9523B to GPIO21; the port polls */
+#define I2C_ADDR_FT6336   0x38
+#define I2C_ADDR_AXP2101  0x34     /* PMIC: LDOs + DLDO1 backlight (bring-up slice) */
+#define I2C_ADDR_AW9523   0x58     /* IO expander: LCD reset, boost enable, touch INT (bring-up slice) */
+#define PANEL_W           240      /* native portrait; the panel scans landscape (MADCTL) */
+#define PANEL_H           320
 #else
 #define PIN_LCD_CS        12
 #define PIN_LCD_PCLK      11

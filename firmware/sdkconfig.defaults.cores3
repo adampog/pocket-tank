@@ -1,0 +1,27 @@
+# The M5Stack CoreS3: layered over sdkconfig.defaults, as the CYD's and the
+# Touch-LCD-2's files are. ESP32-S3 - 16 MB flash, but 8 MB QUAD PSRAM (NOT the
+# octal PSRAM of the other three boards), so the base octal mode is overridden
+# below. An ILI9342C 320x240 IPS over SPI (register-compatible with the ILI9341
+# init, so it rides display_port_spi.c), an FT6336 touch at 0x38 on the internal
+# 12/11 I2C bus, an AXP2101 PMIC (0x34) and an AW9523B IO expander (0x58) that
+# drive the panel reset and the DLDO1 backlight. The audio amp is an AW88298
+# (not ES8311): audio stub. Both IMU drivers are off - the CoreS3 carries a
+# BMI270 (and the SE carries none), neither yet supported; the firmware must not
+# assume an IMU is present.
+#
+#   idf.py -B build_cores3 -D SDKCONFIG=build_cores3/sdkconfig \
+#          -D SDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.defaults.cores3" build
+CONFIG_POCKET_TANK_BOARD_CORES3=y
+CONFIG_POCKET_TANK_DISPLAY_SH8601=n
+CONFIG_POCKET_TANK_DISPLAY_ILI9341=y
+CONFIG_POCKET_TANK_TOUCH_FT3168=y
+CONFIG_POCKET_TANK_AUDIO_ES8311=n
+# No supported IMU on this board yet (BMI270 on the CoreS3, none on the SE):
+# both drivers off, so the picture-flip / handling detector stay inert and the
+# firmware does not wait on an IMU that may be absent.
+CONFIG_POCKET_TANK_IMU_QMI8658=n
+CONFIG_POCKET_TANK_IMU_MPU6050=n
+CONFIG_POCKET_TANK_IMU_AUTO_FLIP=n
+# PSRAM: QUAD, overriding the base octal mode (M5Stack CoreS3 is 8 MB quad).
+CONFIG_SPIRAM_MODE_OCT=n
+CONFIG_SPIRAM_MODE_QUAD=y

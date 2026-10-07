@@ -11,17 +11,24 @@ menu "pocket-tank"
             bool "2.8in ESP32-S3 CYD, ES3C28P: ILI9341 + FT6336 (320x240)"
         config POCKET_TANK_BOARD_TLCD2
             bool "Waveshare ESP32-S3-Touch-LCD-2: ST7789T3 + CST816D (320x240)"
+        config POCKET_TANK_BOARD_CORES3
+            bool "M5Stack CoreS3: ILI9342C + FT6336, AXP2101 + AW9523B (320x240)"
     endchoice
     config POCKET_TANK_TANK_320X240
         bool
-        default y if POCKET_TANK_BOARD_CYD28 || POCKET_TANK_BOARD_TLCD2
+        default y if POCKET_TANK_BOARD_CYD28 || POCKET_TANK_BOARD_TLCD2 || POCKET_TANK_BOARD_CORES3
         help
             The small landscape boards: common/tank.h lays the tank out at
             320x240, and touch arrives already landscape from the driver.
     config POCKET_TANK_DISPLAY_ILI9341
-        bool "Drive the CYD's ILI9341 over SPI, backlight PWM on GPIO45"
-        depends on POCKET_TANK_BOARD_CYD28
+        bool "Drive an ILI9341-family panel over SPI (CYD's ILI9341V, CoreS3's ILI9342C)"
+        depends on POCKET_TANK_BOARD_CYD28 || POCKET_TANK_BOARD_CORES3
         default n
+        help
+            The CoreS3's ILI9342C is register-compatible with the ILI9341 init
+            (display_port_spi.c); reused here to avoid a separate driver. Its
+            backlight is not a PWM GPIO (AXP2101 DLDO1) - that is wired in the
+            CoreS3 bring-up slice.
     config POCKET_TANK_DISPLAY_ST7789
         bool "Drive the Touch-LCD-2's ST7789T3 over SPI, backlight PWM"
         depends on POCKET_TANK_BOARD_TLCD2

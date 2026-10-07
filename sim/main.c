@@ -1761,6 +1761,23 @@ static int style_shot(const char *prefix, int subject) {
     for (int k = 0; k < 6; k++) { tank.clock += 1.0f / 60.0f; render_tank(&tank, fb, TANK_W); }
     snprintf(path, sizeof path, "%s_turn.ppm", prefix); write_ppm(path, fb);
 
+    /* ---- the subject across stages: fry / juv / adult / elder, side-on - so
+     * stage sizing and any stage-grown fins (e.g. the guppy's dorsal/tail)
+     * compose correctly without doubling up. ---- */
+    tank.n_fish = 4;
+    const stage_t stg4[4] = { STAGE_FRY, STAGE_JUV, STAGE_ADULT, STAGE_ELDER };
+    const float age4[4] = { 1, STAGE_JUV_AGE + 1, STAGE_ADULT_AGE + 1, STAGE_ELDER_AGE + 1 };
+    for (int i = 0; i < 4; i++) {
+        tank_make_fish(&tank, i, subject, 0.6f, 0.6f, stg4[i]);
+        progression_set_age(&tank, i, age4[i]); tank.fish[i].eaten = 40;
+        shot_pose(&tank.fish[i], tx4[i], 184, 1.0f, 1.0f);
+        tank.fish[i].hunger = 3; tank.fish[i].stress = 0; tank.fish[i].energy = 8;
+        tank.fish[i].goal.id = GOAL_EXPLORE;
+    }
+    render_set_scene_cache(scene);
+    for (int k = 0; k < 6; k++) { tank.clock += 1.0f / 60.0f; render_tank(&tank, fb, TANK_W); }
+    snprintf(path, sizeof path, "%s_stages.ppm", prefix); write_ppm(path, fb);
+
     /* ---- states: subject normal / hungry / stressed ---- */
     tank.n_fish = 3;
     for (int i = 0; i < 3; i++) {
@@ -1794,7 +1811,7 @@ static int style_shot(const char *prefix, int subject) {
     render_tank(&tank, fb, TANK_W); render_stats_card(&tank, 0, fb, TANK_W);
     snprintf(path, sizeof path, "%s_card.ppm", prefix); write_ppm(path, fb);
 
-    printf("shot-style: subject preset %d (%s); wrote %s_roster/_turn/_states/_sleep/_card.ppm\n",
+    printf("shot-style: subject preset %d (%s); wrote %s_roster/_turn/_stages/_states/_sleep/_card.ppm\n",
            subject, tank_roster_name(subject), prefix);
     return 0;
 }
@@ -3014,6 +3031,32 @@ static int bench(void) {
     return 0;
 }
 
+/* --bench-fish <preset>: time render_tank with the tank filled by ONE preset
+ * (adult), to compare a cartoon style's per-frame fish cost against another
+ * (the fish column in the bench line). Used to sanity-check the costlier
+ * styles (fish-graphics) without a board. */
+static int bench_fish(int preset) {
+    static uint16_t scene[TANK_W * TANK_H];
+    if (preset < 0 || preset >= tank_roster_count()) preset = 0;
+    tank_init(&tank, 77);
+    tank_new_population(&tank);
+    while (tank.n_fish < N_FISH_MAX) tank_add_fish(&tank, 0, 1);
+    tank.n_fish = N_FISH_MAX;
+    for (int i = 0; i < tank.n_fish; i++) {
+        tank_make_fish(&tank, i, preset, 0.6f, 0.6f, STAGE_ADULT);
+        progression_set_age(&tank, i, STAGE_ADULT_AGE + 1);
+    }
+    render_set_scene_cache(scene);
+    render_set_vignette_cache(vig_buf);
+    render_set_card_cache(card_buf);
+    render_set_dirty_mask(dirty_buf);
+    render_clock_us = bench_clock_us;
+    for (int b = 0; b < VEG_BEDS; b++) tank_veg_set(&tank, b, VEG_NUB);
+    char label[48]; snprintf(label, sizeof label, "%dx %s adult", N_FISH_MAX, tank_roster_name(preset));
+    bench_scene(label, false);
+    return 0;
+}
+
 int main(int argc, char **argv) {
     for (int a = 1; a < argc; a++)
         if (strcmp(argv[a], "--greedy") == 0) advisor_core_sample = false;
@@ -3025,6 +3068,7 @@ int main(int argc, char **argv) {
             return snapshot(argv[a + 1], a + 2 < argc ? atoi(argv[a + 2]) : 20);
         if (strcmp(argv[a], "--selftest") == 0) return selftest();
         if (strcmp(argv[a], "--bench") == 0) return bench();
+        if (strcmp(argv[a], "--bench-fish") == 0 && a + 1 < argc) return bench_fish(atoi(argv[a + 1]));
         if (strcmp(argv[a], "--selftest-hunger") == 0) return selftest_hunger();
         if (strcmp(argv[a], "--selftest-shop") == 0) return selftest_shop();
         if (strcmp(argv[a], "--selftest-battery") == 0) return selftest_battery();

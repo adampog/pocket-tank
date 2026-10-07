@@ -468,6 +468,85 @@ static void draw_fish_core(ctx_t *c, const fish_t *f, float clock, bool asleep, 
                 fill_ellipse(c, TX(12, 1.8f), TY(12, 1.8f), 2.3f * f->size, 1.3f * f->size, body, 255);
             }
         }
+    } else if (f->style == FISH_STYLE_FANCY_GUPPY) {
+        /* Fancy Guppy (nori, fish-graphics slice 04): a slim body with a long
+         * flowing dorsal fin and a big veil tail (both trailing, rippling with
+         * the swim phase) and shimmer spots. The flowing fins are this style's
+         * cost risk, so they are a handful of extra polygon points - no
+         * per-pixel work, no heap. Everything goes through TX/TY like the body,
+         * so the fins foreshorten with yaw and tilt with pitch (slice-02
+         * discipline); the fins REPLACE the generic adult/elder crest (no
+         * double-up) and instead grow with stage via `fs`. Shimmer spots are
+         * circles (pitch-invariant), inside the body, faded head-on. */
+        float fs = f->stage == STAGE_FRY ? 0.5f : f->stage == STAGE_JUV ? 0.74f
+                 : f->stage == STAGE_ELDER ? 1.2f : 1.0f;   /* fin elaboration by stage */
+        float flow = tail * 10.0f;                           /* the trailing ripple (bigger sway than other styles) */
+        uint32_t finlt = mix(fin, 0xffffff, 0.18f);          /* a lighter edge tone for the veils */
+
+        /* the big veil tail: a convex kite, flapping/trailing with the phase */
+        {
+            float lx[4] = { -12, -30 * tail_len, -34 * tail_len, -30 * tail_len };
+            float ly[4] = { 0, -16 * fs - flow, 0, 16 * fs + flow };
+            float xs[4], ys[4];
+            for (int i = 0; i < 4; i++) { xs[i] = TX(lx[i], ly[i]); ys[i] = TY(lx[i], ly[i]); }
+            fill_poly(c, xs, ys, 4, fin);
+            /* a slimmer lighter inner veil for a layered, flowing look */
+            float lx2[3] = { -13, -27 * tail_len, -27 * tail_len };
+            float ly2[3] = { 0, -8 * fs - flow * 0.6f, 8 * fs + flow * 0.6f };
+            float xs2[3], ys2[3];
+            for (int i = 0; i < 3; i++) { xs2[i] = TX(lx2[i], ly2[i]); ys2[i] = TY(lx2[i], ly2[i]); }
+            fill_poly(c, xs2, ys2, 3, finlt);
+        }
+        /* the long flowing dorsal: a tall arching fin along the back, its
+         * trailing edge rippling with the phase; grows with stage via fs */
+        {
+            float w = flow * 0.5f;
+            float lx[5] = { 8, 2, -6, -13, -16 };
+            float ly[5] = { -6, (-15 - w) * fs, (-19 - w) * fs, (-15 - w) * fs, -4 };
+            float xs[5], ys[5];
+            for (int i = 0; i < 5; i++) { xs[i] = TX(lx[i], ly[i]); ys[i] = TY(lx[i], ly[i]); }
+            fill_poly(c, xs, ys, 5, fin);
+        }
+        /* the slim body */
+        {
+            static const float blx[10] = { 16, 10, 2, -8, -15, -19, -15, -8, 2, 10 };
+            static const float bly[10] = { 0, -6, -8, -7, -5, 0, 5, 7, 8, 6 };
+            float xs[10], ys[10];
+            for (int i = 0; i < 10; i++) { xs[i] = TX(blx[i], bly[i]); ys[i] = TY(blx[i], bly[i]); }
+            fill_poly(c, xs, ys, 10, body);
+            float sm = yaw_at(yh, yt, 2), rx = 3.6f * f->size * sqrtf(fmaxf(0, 1 - sm * sm));
+            if (rx >= 1) fill_ellipse(c, TX(2, 0), TY(2, 0), rx, 7.5f * f->size, body, 255);
+        }
+        /* shimmer spots: a few pale accent circles on the flank (pitch-safe),
+         * faded and shrunk head-on so they stay inside the slim body */
+        {
+            static const float spx[4] = { 6, 0, -6, -12 }, spy[4] = { -2, -3, -1, -2 };
+            for (int k = 0; k < 4; k++) {
+                float s = fabsf(yaw_at(yh, yt, spx[k]));
+                if (s <= 0.35f) continue;
+                float r = 1.3f * f->size * s;
+                fill_ellipse(c, TX(spx[k], spy[k]), TY(spx[k], spy[k]), r, r, f->accent, 190);
+            }
+        }
+        /* eye on the head + catch-light; a lid when asleep */
+        float er = 2.6f * f->size;
+        if (asleep) {
+            fill_ellipse(c, TX(9, -2.5f), TY(9, -2.5f), er, 0.8f * f->size, 0x9fb4b8, 220);
+        } else {
+            fill_ellipse(c, TX(9, -2.5f), TY(9, -2.5f), er, er, 0xffffff, 255);
+            fill_ellipse(c, TX(9.6f, -2.6f), TY(9.6f, -2.6f), er * 0.60f, er * 0.60f, 0x120a1f, 255);
+            fill_ellipse(c, TX(8.7f, -3.3f), TY(8.7f, -3.3f), er * 0.24f, er * 0.24f, 0xffffff, 230);
+        }
+        /* a small smile on the front flank - fades head-on, hidden asleep */
+        {
+            float s = fabsf(yaw_at(yh, yt, 11));
+            if (s > 0.3f && !asleep) {
+                int a = (int)(190 * (s - 0.3f) / 0.7f);
+                fill_ellipse(c, TX(12, 2.4f), TY(12, 2.4f), 1.9f * f->size, 1.2f * f->size,
+                             0x120a1f, a + 55 > 255 ? 255 : a + 55);
+                fill_ellipse(c, TX(12, 1.7f), TY(12, 1.7f), 2.2f * f->size, 1.2f * f->size, body, 255);
+            }
+        }
     } else {
     /* tail fin (triangle, flaps with tail phase) */
     {

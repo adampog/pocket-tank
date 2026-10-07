@@ -372,6 +372,102 @@ static void draw_fish_core(ctx_t *c, const fish_t *f, float clock, bool asleep, 
                 fill_ellipse(c, TX(12, 2.1f), TY(12, 2.1f), 2.4f * f->size, 1.4f * f->size, body, 255);
             }
         }
+    } else if (f->style == FISH_STYLE_FLAT_MODERN) {
+        /* Flat Modern (kelp, fish-graphics slice 03): a bold flat-vector body
+         * with a THICK DARK OUTLINE, a two-tone belly (lighter underside), a
+         * few accent spots and crisp angular fins. Every shape - outline, body,
+         * belly, spots - is taken through TX/TY (like the body polygon), so it
+         * foreshortens with yaw, tilts with pitch and stays inside the
+         * silhouette: the outline IS the outermost silhouette (the body polygon
+         * scaled up about its centroid), the belly uses the body's own bottom
+         * outline, and the spots are circles (rx==ry, so pitch can't distort
+         * them) placed well inside and faded head-on. Heeds the slice-02 lesson
+         * - no screen-aligned geometry. Hunger/stress feed body/belly/fin, so
+         * they still read. Procedural only - polys + ellipses, no heap. */
+        uint32_t outline = mix(body, 0x05100a, 0.72f);      /* the thick dark outline */
+        uint32_t belly   = mix(body, 0xffffff, 0.40f);      /* the lighter two-tone underside */
+        static const float blx[10] = { 16, 10, 2, -8, -15, -19, -15, -8, 2, 10 };
+        static const float bly[10] = { 0, -7, -10, -9, -6, 0, 6, 9, 10, 7 };
+
+        /* angular tail (sharp triangle): dark outline then fill */
+        {
+            float lx[3] = {-12, -28 * tail_len, -27 * tail_len}, ly[3] = {0, -14 - tail * 8, 12 + tail * 8};
+            float ox[3], oy[3], xs[3], ys[3]; const float TCX = -22.0f;
+            for (int i = 0; i < 3; i++) {
+                float ol = TCX + (lx[i]-TCX)*1.22f, oy2 = ly[i]*1.22f;
+                ox[i] = TX(ol, oy2); oy[i] = TY(ol, oy2);
+                xs[i] = TX(lx[i], ly[i]); ys[i] = TY(lx[i], ly[i]);
+            }
+            fill_poly(c, ox, oy, 3, outline);
+            fill_poly(c, xs, ys, 3, fin);
+        }
+        /* angular dorsal (grown): a sharp triangle, outlined */
+        if (grown) {
+            float h = elder ? -17 : -14;
+            float lx[3] = {6, -1, -9}, ly[3] = {-8, h, -8};
+            float ox[3], oy[3], xs[3], ys[3]; const float DCX = -1.0f, DCY = -10.0f;
+            for (int i = 0; i < 3; i++) {
+                float ol = DCX + (lx[i]-DCX)*1.22f, oly = DCY + (ly[i]-DCY)*1.22f;
+                ox[i] = TX(ol, oly); oy[i] = TY(ol, oly);
+                xs[i] = TX(lx[i], ly[i]); ys[i] = TY(lx[i], ly[i]);
+            }
+            fill_poly(c, ox, oy, 3, outline);
+            fill_poly(c, xs, ys, 3, fin);
+        }
+        /* body: the thick dark outline (polygon scaled up about its centroid)
+         * then the flat fill */
+        {
+            const float BCX = -1.5f;
+            float ox[10], oy[10], xs[10], ys[10];
+            for (int i = 0; i < 10; i++) {
+                float ol = BCX + (blx[i]-BCX)*1.16f, oly = bly[i]*1.16f;
+                ox[i] = TX(ol, oly); oy[i] = TY(ol, oly);
+                xs[i] = TX(blx[i], bly[i]); ys[i] = TY(blx[i], bly[i]);
+            }
+            fill_poly(c, ox, oy, 10, outline);
+            fill_poly(c, xs, ys, 10, body);
+        }
+        /* two-tone belly: the lower body, split just below the midline; built
+         * from the body's own bottom outline so it stays inside the fill */
+        {
+            static const float lx[6] = { 10, 2, -8, -15, -15, 11 };
+            static const float ly[6] = {  7, 10, 9,   6,   2,  2 };
+            float xs[6], ys[6];
+            for (int i = 0; i < 6; i++) { xs[i] = TX(lx[i], ly[i]); ys[i] = TY(lx[i], ly[i]); }
+            fill_poly(c, xs, ys, 6, belly);
+        }
+        /* a few accent spots on the upper flank: circles (pitch-invariant),
+         * centres through TX/TY, faded and shrunk head-on so they never cross
+         * the edge */
+        {
+            static const float spx[3] = { 5, -3, -11 }, spy[3] = { -4, -3, -2 };
+            for (int k = 0; k < 3; k++) {
+                float s = fabsf(yaw_at(yh, yt, spx[k]));
+                if (s <= 0.35f) continue;
+                float r = 1.7f * f->size * s;
+                fill_ellipse(c, TX(spx[k], spy[k]), TY(spx[k], spy[k]), r, r, f->accent, 235);
+            }
+        }
+        /* a boldly outlined eye on the head + catch-light; a lid when asleep */
+        float er = 2.7f * f->size;
+        if (asleep) {
+            fill_ellipse(c, TX(9, -3), TY(9, -3), er, 0.8f * f->size, outline, 230);
+        } else {
+            fill_ellipse(c, TX(9, -3), TY(9, -3), er + 0.6f, er + 0.6f, outline, 255);   /* dark eye ring */
+            fill_ellipse(c, TX(9, -3), TY(9, -3), er, er, 0xffffff, 255);
+            fill_ellipse(c, TX(9.5f, -3.1f), TY(9.5f, -3.1f), er * 0.58f, er * 0.58f, 0x08140d, 255);
+            fill_ellipse(c, TX(8.7f, -3.8f), TY(8.7f, -3.8f), er * 0.24f, er * 0.24f, 0xffffff, 230);
+        }
+        /* a small smile on the front flank - fades head-on, hidden asleep */
+        {
+            float s = fabsf(yaw_at(yh, yt, 11));
+            if (s > 0.3f && !asleep) {
+                int a = (int)(200 * (s - 0.3f) / 0.7f);
+                fill_ellipse(c, TX(12, 2.6f), TY(12, 2.6f), 2.0f * f->size, 1.3f * f->size,
+                             0x08140d, a + 55 > 255 ? 255 : a + 55);
+                fill_ellipse(c, TX(12, 1.8f), TY(12, 1.8f), 2.3f * f->size, 1.3f * f->size, body, 255);
+            }
+        }
     } else {
     /* tail fin (triangle, flaps with tail phase) */
     {

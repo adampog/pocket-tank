@@ -1762,6 +1762,7 @@ static int style_shot(const char *prefix, int subject) {
     snprintf(path, sizeof path, "%s_turn.ppm", prefix); write_ppm(path, fb);
 
     /* ---- states: subject normal / hungry / stressed ---- */
+    tank.n_fish = 3;
     for (int i = 0; i < 3; i++) {
         tank_make_fish(&tank, i, subject, 0.6f, 0.6f, STAGE_ADULT);
         progression_set_age(&tank, i, STAGE_ADULT_AGE + 1); tank.fish[i].eaten = 40;

@@ -62,17 +62,26 @@ static bool on_trans_done(esp_lcd_panel_io_handle_t io, esp_lcd_panel_io_event_d
 }
 
 static void backlight_init(void) {
+#if PIN_LCD_BL < 0
+    /* No PWM backlight GPIO (CoreS3: the backlight is AXP2101 DLDO1, driven in
+     * slice 03). Configuring an LEDC channel on GPIO -1 aborts, so skip it. */
+#else
     ledc_timer_config_t timer = { .speed_mode = LEDC_LOW_SPEED_MODE, .duty_resolution = LEDC_TIMER_8_BIT,
                                   .timer_num = BL_TIMER, .freq_hz = 5000, .clk_cfg = LEDC_AUTO_CLK };
     ESP_ERROR_CHECK(ledc_timer_config(&timer));
     ledc_channel_config_t channel = { .gpio_num = PIN_LCD_BL, .speed_mode = LEDC_LOW_SPEED_MODE,
                                       .channel = BL_CHANNEL, .timer_sel = BL_TIMER, .duty = 0, .hpoint = 0 };
     ESP_ERROR_CHECK(ledc_channel_config(&channel));
+#endif
 }
 
 static void backlight_set(uint8_t level) {
+#if PIN_LCD_BL < 0
+    (void)level;   /* DLDO1 backlight is slice 03 */
+#else
     ledc_set_duty(LEDC_LOW_SPEED_MODE, BL_CHANNEL, level);
     ledc_update_duty(LEDC_LOW_SPEED_MODE, BL_CHANNEL);
+#endif
 }
 
 /* MADCTL for the current flip: upright uses the bench mirrors, flipped
@@ -83,10 +92,88 @@ static void apply_orientation(void) {
     s_applied_inverted = s_inverted;
 }
 
+#if CONFIG_POCKET_TANK_BOARD_CORES3
+/* CoreS3 pre-panel bring-up. The ILI9342C has no power or reset GPIO on this
+ * board (PIN_LCD_RST/PIN_LCD_BL are -1): its VCI rail hangs off the AXP2101 PMIC
+ * (0x34) and its reset line off the AW9523B IO-expander (0x58), both on the
+ * internal I2C bus. M5GFX powers these before it ever touches the panel, so we
+ * do the same here, before new_panel / esp_lcd_panel_reset below.
+ *
+ * The register writes mirror the vendor sequence exactly (see the slice proof
+ * note): AW9523B from M5GFX 0.2.32 (M5GFX.cpp board-detect, ~L1769-1781) and the
+ * AXP2101 ALDO rails from M5Unified 0.2.25 (Power_Class.inl CoreS3 case,
+ * ~L409-430). AW9523B P1_7 (0x03 bit7) enables the SY7088 boost; P1_1 (0x03
+ * bit1) driven high releases the LCD from reset (power-on default low = held in
+ * reset). AXP2101 ALDO2 (0x93, 3.3 V) is the panel's VCI. The DLDO1 backlight is
+ * slice 03, not here.
+ *
+ * Best-effort, like the AMOLED expander_power_up() and the battery port: in QEMU
+ * (or with no chip present) nothing ACKs, so each step logs and continues rather
+ * than hang the boot - the panel init that follows then fails, which is expected
+ * off-target. The read-modify-write helpers match M5GFX's i2c::bitOn/bitOff. */
+static bool cores3_reg_wr(i2c_master_dev_handle_t d, uint8_t reg, uint8_t val) {
+    uint8_t b[2] = { reg, val };
+    return i2c_master_transmit(d, b, 2, 100) == ESP_OK;
+}
+static bool cores3_reg_biton(i2c_master_dev_handle_t d, uint8_t reg, uint8_t mask) {
+    uint8_t v, r = reg;
+    return i2c_master_transmit_receive(d, &r, 1, &v, 1, 100) == ESP_OK
+        && cores3_reg_wr(d, reg, (uint8_t)(v | mask));
+}
+static bool cores3_reg_bitoff(i2c_master_dev_handle_t d, uint8_t reg, uint8_t mask) {
+    uint8_t v, r = reg;
+    return i2c_master_transmit_receive(d, &r, 1, &v, 1, 100) == ESP_OK
+        && cores3_reg_wr(d, reg, (uint8_t)(v & ~mask));
+}
+static void cores3_power_up(void) {
+    i2c_device_config_t cfg = { .dev_addr_length = I2C_ADDR_BIT_LEN_7, .scl_speed_hz = 400000 };
+    i2c_master_dev_handle_t dev;
+    int ok = 0, n = 0;
+
+    /* AW9523B (0x58): output levels, direction, GPIO (not LED) mode; this is also
+     * where SY7088 boost (P1_7) comes on and LCD reset (P1_1) is released. */
+    cfg.device_address = I2C_ADDR_AW9523;
+    if (i2c_master_bus_add_device(s_i2c, &cfg, &dev) == ESP_OK) {
+        n += 7;
+        ok += cores3_reg_biton(dev, 0x02, 0b00000111);   /* P0 output levels */
+        ok += cores3_reg_biton(dev, 0x03, 0b10000011);   /* P1 levels: bit7 SY7088 boost EN, bit1 LCD reset release */
+        ok += cores3_reg_wr   (dev, 0x04, 0b00011000);   /* P0 direction (CONFIG_P0) */
+        ok += cores3_reg_wr   (dev, 0x05, 0b00001100);   /* P1 direction (CONFIG_P1) */
+        ok += cores3_reg_wr   (dev, 0x11, 0b00010000);   /* GCR: P0 push-pull */
+        ok += cores3_reg_wr   (dev, 0x12, 0xFF);         /* LEDMODE_P0 -> GPIO mode */
+        ok += cores3_reg_wr   (dev, 0x13, 0xFF);         /* LEDMODE_P1 -> GPIO mode */
+        i2c_master_bus_rm_device(dev);
+    } else ESP_LOGW(TAG, "CoreS3: AW9523B (0x%02X) absent - boost/reset not driven (expected in QEMU)", I2C_ADDR_AW9523);
+
+    /* AXP2101 (0x34): disable the DCDC UVP power-off latch, LDOs on, ALDO rails. */
+    cfg.device_address = I2C_ADDR_AXP2101;
+    if (i2c_master_bus_add_device(s_i2c, &cfg, &dev) == ESP_OK) {
+        n += 6;
+        ok += cores3_reg_bitoff(dev, 0x23, 0x1F);        /* DCDC1-5 UVP power-off disable */
+        ok += cores3_reg_wr    (dev, 0x90, 0xBF);        /* LDOs on (ALDO1-4, BLDO1-2, DLDO1) */
+        ok += cores3_reg_wr    (dev, 0x92, 18 - 5);      /* ALDO1 = 1.8 V */
+        ok += cores3_reg_wr    (dev, 0x93, 33 - 5);      /* ALDO2 = 3.3 V (panel VCI) */
+        ok += cores3_reg_wr    (dev, 0x94, 33 - 5);      /* ALDO3 = 3.3 V */
+        ok += cores3_reg_wr    (dev, 0x95, 33 - 5);      /* ALDO4 = 3.3 V */
+        i2c_master_bus_rm_device(dev);
+    } else ESP_LOGW(TAG, "CoreS3: AXP2101 (0x%02X) absent - panel rails not powered (expected in QEMU)", I2C_ADDR_AXP2101);
+
+    if (ok == n) ESP_LOGI(TAG, "CoreS3 pre-panel bring-up: AW9523B + AXP2101 rails up (%d/%d writes acked)", ok, n);
+    else ESP_LOGW(TAG, "CoreS3 pre-panel bring-up: %d/%d I2C writes acked (chip absent or no-ACK); continuing", ok, n);
+
+    vTaskDelay(pdMS_TO_TICKS(120));   /* let the boosted rail + ALDO2 settle and the panel leave reset before init */
+}
+#endif /* CONFIG_POCKET_TANK_BOARD_CORES3 */
+
 bool display_port_init(void) {
     i2c_master_bus_config_t bus = { .i2c_port = I2C_NUM_0, .sda_io_num = PIN_I2C_SDA, .scl_io_num = PIN_I2C_SCL,
         .clk_source = I2C_CLK_SRC_DEFAULT, .glitch_ignore_cnt = 7, .flags.enable_internal_pullup = true };
     ESP_ERROR_CHECK(i2c_new_master_bus(&bus, &s_i2c));
+#if CONFIG_POCKET_TANK_BOARD_CORES3
+    /* Power the panel rail and release its reset (AXP2101 + AW9523B) before any
+     * panel traffic - the ILI9342C has no power/reset GPIO on the CoreS3. */
+    cores3_power_up();
+#endif
     /* Who answers on the shared bus: the bring-up question for the codec. */
     for (int address = 0x08; address < 0x78; address++)
         if (i2c_master_probe(s_i2c, address, 20) == ESP_OK) ESP_LOGI(TAG, "i2c: device at 0x%02X", address);

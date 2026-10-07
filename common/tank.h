@@ -162,8 +162,9 @@ enum {
  * persisted: a loaded save rebuilds each fish via tank_make_fish, so old saves
  * default to their preset's style. */
 enum {
-    FISH_STYLE_CLASSIC       = 0,   /* the original flat silhouette (all presets but mira, this slice) */
-    FISH_STYLE_CHUBBY_PEBBLE = 1,   /* fat round kawaii body, big eye, cheek blush, little smile (mira) */
+    FISH_STYLE_CLASSIC        = 0,  /* the original flat silhouette (presets without a cartoon style yet) */
+    FISH_STYLE_CHUBBY_PEBBLE  = 1,  /* fat round kawaii body, big eye, cheek blush, little smile (mira) */
+    FISH_STYLE_CLASSIC_CARTOON = 2, /* clean almond, Nemo-style white side stripes, big eye, smile (bolt) */
 };
 
 typedef struct {

@@ -84,13 +84,13 @@ typedef struct {
     float size, curiosity, lazy, turn_rate;
     uint8_t style;          /* FISH_STYLE_* (tank.h): the preset's cartoon look */
 } preset_t;
-/* style per preset (fish-graphics): only mira is styled this slice (Chubby
- * Pebble); the other five stay FISH_STYLE_CLASSIC until Alan reviews mira and
- * their styles (2..6) are shaped. */
+/* style per preset (fish-graphics): mira = Chubby Pebble (slice 01), bolt =
+ * Classic Cartoon (slice 02). The remaining four stay FISH_STYLE_CLASSIC until
+ * their styles (3..6) are shaped in later slices. */
 static const preset_t ROSTER[] = {
     /* name    color     fin       accent    size  cur  lazy  turn  style */
     { "mira", 0x38dcc7, 0x1d9f98, 0xffbd59, 1.08f, 7.5f, 0.2f, 3.2f, FISH_STYLE_CHUBBY_PEBBLE },
-    { "bolt", 0xff725c, 0xb83a43, 0xffe08a, 0.94f, 6.0f, 0.2f, 4.2f, FISH_STYLE_CLASSIC },
+    { "bolt", 0xff725c, 0xb83a43, 0xffe08a, 0.94f, 6.0f, 0.2f, 4.2f, FISH_STYLE_CLASSIC_CARTOON },
     { "kelp", 0x78d67d, 0x3f8b55, 0xa799ff, 0.86f, 4.0f, 0.1f, 3.2f, FISH_STYLE_CLASSIC },
     { "nori", 0xa799ff, 0x6b5ed6, 0x78d67d, 1.00f, 5.0f, 0.7f, 2.4f, FISH_STYLE_CLASSIC },
     { "pip",  0xffd166, 0xc98a1e, 0x38dcc7, 0.90f, 6.5f, 0.3f, 3.8f, FISH_STYLE_CLASSIC },

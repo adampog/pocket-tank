@@ -36,7 +36,7 @@
  *   ./fishsim --selftest-shop        headless sand dollars: awards, the shop, the plant, the snail, the save
  *   ./fishsim --selftest-battery     headless battery page: stretches, sleep, learned rates, estimates, the pill
  *   ./fishsim --selftest-saves       headless update promise: every save in testdata/saves, whole and cut to older builds' lengths
- *   ./fishsim --shot-style <prefix>  headless PPMs of mira's Chubby Pebble (fish-graphics slice 01): cast/states/sleep/card
+ *   ./fishsim --shot-style <prefix> [preset]  headless PPMs of a preset's cartoon style (fish-graphics): roster/turn/states/sleep/card
  *   ./fishsim --bench                headless render-cost profile (veg, card)
  *   (key Z: jump through 7 h of device-style sleep; key G: grow the canopy +
  *    algae now to try the chores - press again to cycle)
@@ -1692,58 +1692,80 @@ static int hero_shot(const char *prefix) {
     return 0;
 }
 
-/* --shot-style <prefix> (fish-graphics slice 01, 2026-10-07): mira's Chubby
- * Pebble proven in software without a window. Poses mira (preset 0, style 1)
- * and dumps:
- *   _cast  - mira at fry/juv/adult/elder side-on, a CLASSIC bolt for contrast,
- *            and one mira mid-yaw-turn (the eye stays on the head/left end);
- *   _states- mira normal / hungry (desaturated) / stressed (reddened);
- *   _sleep - mira asleep at night (the lidded eye);
- *   _card  - the stats-card portrait of mira (render_fish_portrait path).
- * Head faces left (heading = PI); the eye/mouth ride lx>0 so they stay on the
- * leading end through the turn. */
+/* --shot-style <prefix> [preset] (fish-graphics, 2026-10-07): the cartoon
+ * styles proven in software without a window. `preset` is the subject roster
+ * index (default 0 = mira). Dumps:
+ *   _roster - all six presets adult side-on: every preset's current look at
+ *             once (styled ones + the classic silhouette still on the rest);
+ *   _turn   - the subject side-on, mid-turn and near head-on (markings/eye
+ *             foreshorten, the eye/mouth stay on the head/left end);
+ *   _states - the subject normal / hungry (desaturated) / stressed (reddened);
+ *   _sleep  - the subject asleep at night (the lidded eye);
+ *   _card   - the subject's stats-card portrait (render_fish_portrait path).
+ * Head faces left (heading = PI); eye/mouth ride lx>0 so they stay leading. */
 static void shot_pose(fish_t *f, float x, float y, float yaw, float yaw_tail) {
-    f->x = x; f->y = y; f->heading = 3.14159f; tank_fish_face(f);   /* head left */
+    f->x = x; f->y = y; f->heading = 3.14159f; tank_fish_face(f);   /* head left, level */
     f->yaw = yaw; f->yaw_tail = yaw_tail;                           /* override for a posed turn */
     f->speed = f->target_speed = 30; f->hesitate = 0;
 }
-static int style_shot(const char *prefix) {
+/* a pitched pose: `heading` drives the climb/dive (draw_fish_core folds it into
+ * the body tilt), yaw stays at the facing side (full side-on, but tilted) - so
+ * markings must follow the tilted body, not stay screen-vertical. */
+static void shot_pose_pitch(fish_t *f, float x, float y, float heading) {
+    f->x = x; f->y = y; f->heading = heading; tank_fish_face(f);
+    f->speed = f->target_speed = 55; f->hesitate = 0;              /* a dash: the pitch cap opens up */
+}
+static int style_shot(const char *prefix, int subject) {
     static uint16_t fb[TANK_W * TANK_H], scene[TANK_W * TANK_H];
     char path[512];
+    if (subject < 0 || subject >= tank_roster_count()) subject = 0;
     render_set_vignette_cache(vig_buf);
     render_set_card_cache(card_buf);
     render_set_dirty_mask(dirty_buf);
 
-    /* ---- the cast: stages + a classic contrast + a turn ---- */
+    /* ---- the roster: all six presets, adult, side-on ---- */
     tank_init(&tank, 2024);
     tank_new_population(&tank);
     while (tank.n_fish < N_FISH_MAX) tank_add_fish(&tank, 0, 1);
     tank.n_fish = 6;
-    const stage_t stg[6] = { STAGE_ELDER, STAGE_ADULT, STAGE_JUV, STAGE_FRY, STAGE_ADULT, STAGE_ADULT };
-    const int     prs[6] = { 0, 0, 0, 0, 1, 0 };   /* [4] = bolt (classic), the rest mira */
-    const float   age[6] = { STAGE_ELDER_AGE + 1, STAGE_ADULT_AGE + 1, STAGE_JUV_AGE + 1, 1,
-                             STAGE_ADULT_AGE + 1, STAGE_ADULT_AGE + 1 };
-    const float   px6[6] = { 110, 300, 110, 300, 110, 320 };
-    const float   py6[6] = { 80, 80, 195, 195, 310, 300 };
+    const float rx6[6] = { 95, 224, 353, 95, 224, 353 };
+    const float ry6[6] = { 110, 110, 110, 250, 250, 250 };
     for (int i = 0; i < 6; i++) {
-        tank_make_fish(&tank, i, prs[i], 0.6f, 0.6f, stg[i]);
-        fish_t *f = &tank.fish[i];
-        progression_set_age(&tank, i, age[i]);
-        f->eaten = 40;                              /* fed: the grown size bonus reads */
-        shot_pose(f, px6[i], py6[i], i == 5 ? 0.18f : 1.0f, i == 5 ? 0.72f : 1.0f);
-        f->hunger = 3; f->stress = 0; f->energy = 8; f->goal.id = GOAL_EXPLORE;
+        tank_make_fish(&tank, i, i, 0.6f, 0.6f, STAGE_ADULT);   /* preset i in slot i */
+        progression_set_age(&tank, i, STAGE_ADULT_AGE + 1); tank.fish[i].eaten = 40;
+        shot_pose(&tank.fish[i], rx6[i], ry6[i], 1.0f, 1.0f);
+        tank.fish[i].hunger = 3; tank.fish[i].stress = 0; tank.fish[i].energy = 8;
+        tank.fish[i].goal.id = GOAL_EXPLORE;
     }
     tank.night = false; for (int i = 0; i < MAX_FOOD; i++) tank.food[i].alive = false;
     render_set_scene_cache(scene);
     for (int k = 0; k < 6; k++) { tank.clock += 1.0f / 60.0f; render_tank(&tank, fb, TANK_W); }
-    snprintf(path, sizeof path, "%s_cast.ppm", prefix); write_ppm(path, fb);
+    snprintf(path, sizeof path, "%s_roster.ppm", prefix); write_ppm(path, fb);
 
-    /* ---- states: mira normal / hungry / stressed ---- */
-    tank.n_fish = 3;
-    for (int i = 0; i < 3; i++) {
-        tank_make_fish(&tank, i, 0, 0.6f, 0.6f, STAGE_ADULT);
+    /* ---- the subject through a turn AND a pitch: side-on, mid-turn, climbing,
+     * diving - markings must follow the body (foreshorten with yaw, tilt with
+     * pitch) and stay inside the silhouette. ---- */
+    tank.n_fish = 4;
+    const float tx4[4] = { 70, 175, 285, 390 };
+    for (int i = 0; i < 4; i++) {
+        tank_make_fish(&tank, i, subject, 0.6f, 0.6f, STAGE_ADULT);
         progression_set_age(&tank, i, STAGE_ADULT_AGE + 1); tank.fish[i].eaten = 40;
-        shot_pose(&tank.fish[i], 110 + i * 110, 184, 1.0f, 1.0f);
+        if (i == 0)      shot_pose(&tank.fish[i], tx4[i], 184, 1.0f, 1.0f);        /* side-on */
+        else if (i == 1) shot_pose(&tank.fish[i], tx4[i], 184, 0.32f, 0.78f);      /* mid-turn (yaw) */
+        else if (i == 2) shot_pose_pitch(&tank.fish[i], tx4[i], 184, -1.0f);       /* climbing (nose up) */
+        else             shot_pose_pitch(&tank.fish[i], tx4[i], 184,  1.0f);       /* diving (nose down) */
+        tank.fish[i].hunger = 3; tank.fish[i].stress = 0; tank.fish[i].energy = 8;
+        tank.fish[i].goal.id = GOAL_EXPLORE;
+    }
+    render_set_scene_cache(scene);
+    for (int k = 0; k < 6; k++) { tank.clock += 1.0f / 60.0f; render_tank(&tank, fb, TANK_W); }
+    snprintf(path, sizeof path, "%s_turn.ppm", prefix); write_ppm(path, fb);
+
+    /* ---- states: subject normal / hungry / stressed ---- */
+    for (int i = 0; i < 3; i++) {
+        tank_make_fish(&tank, i, subject, 0.6f, 0.6f, STAGE_ADULT);
+        progression_set_age(&tank, i, STAGE_ADULT_AGE + 1); tank.fish[i].eaten = 40;
+        shot_pose(&tank.fish[i], 110 + i * 115, 184, 1.0f, 1.0f);
         tank.fish[i].energy = 8; tank.fish[i].goal.id = GOAL_EXPLORE;
     }
     tank.fish[0].hunger = 3;  tank.fish[0].stress = 0;    /* normal */
@@ -1755,7 +1777,7 @@ static int style_shot(const char *prefix) {
 
     /* ---- asleep at night: the lidded eye ---- */
     tank.n_fish = 1;
-    tank_make_fish(&tank, 0, 0, 0.6f, 0.6f, STAGE_ADULT);
+    tank_make_fish(&tank, 0, subject, 0.6f, 0.6f, STAGE_ADULT);
     progression_set_age(&tank, 0, STAGE_ADULT_AGE + 1); tank.fish[0].eaten = 40;
     shot_pose(&tank.fish[0], TANK_W / 2.0f, TANK_H / 2.0f, 1.0f, 1.0f);
     tank.fish[0].hunger = 3; tank.fish[0].stress = 0; tank.fish[0].energy = 8;
@@ -1765,14 +1787,14 @@ static int style_shot(const char *prefix) {
     for (int k = 0; k < 6; k++) { tank.clock += 1.0f / 60.0f; render_tank(&tank, fb, TANK_W); }
     snprintf(path, sizeof path, "%s_sleep.ppm", prefix); write_ppm(path, fb);
 
-    /* ---- the stats card portrait of mira (render_fish_portrait path) ---- */
+    /* ---- the subject's stats-card portrait (render_fish_portrait path) ---- */
     tank.night = false;
     render_set_scene_cache(scene);
     render_tank(&tank, fb, TANK_W); render_stats_card(&tank, 0, fb, TANK_W);
     snprintf(path, sizeof path, "%s_card.ppm", prefix); write_ppm(path, fb);
 
-    printf("shot-style: wrote %s_cast.ppm, %s_states.ppm, %s_sleep.ppm, %s_card.ppm\n",
-           prefix, prefix, prefix, prefix);
+    printf("shot-style: subject preset %d (%s); wrote %s_roster/_turn/_states/_sleep/_card.ppm\n",
+           subject, tank_roster_name(subject), prefix);
     return 0;
 }
 
@@ -2996,7 +3018,8 @@ int main(int argc, char **argv) {
         if (strcmp(argv[a], "--greedy") == 0) advisor_core_sample = false;
     for (int a = 1; a < argc; a++) {                 /* mode flags may sit anywhere */
         if (strcmp(argv[a], "--hero") == 0 && a + 1 < argc) return hero_shot(argv[a + 1]);
-        if (strcmp(argv[a], "--shot-style") == 0 && a + 1 < argc) return style_shot(argv[a + 1]);
+        if (strcmp(argv[a], "--shot-style") == 0 && a + 1 < argc)
+            return style_shot(argv[a + 1], a + 2 < argc ? atoi(argv[a + 2]) : 0);
         if (strcmp(argv[a], "--snapshot") == 0 && a + 1 < argc)
             return snapshot(argv[a + 1], a + 2 < argc ? atoi(argv[a + 2]) : 20);
         if (strcmp(argv[a], "--selftest") == 0) return selftest();

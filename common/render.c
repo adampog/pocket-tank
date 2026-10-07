@@ -294,6 +294,84 @@ static void draw_fish_core(ctx_t *c, const fish_t *f, float clock, bool asleep, 
                 fill_ellipse(c, TX(11, 2.3f), TY(11, 2.3f), 2.6f * f->size, 1.5f * f->size, body, 255);
             }
         }
+    } else if (f->style == FISH_STYLE_CLASSIC_CARTOON) {
+        /* Classic Cartoon (bolt, fish-graphics slice 02): a clean almond body
+         * with Nemo-style white side stripes (thin dark edging), a rounded
+         * dorsal, a fan tail, a big eye and a small smile. Same TX/TY
+         * transforms as every style, so yaw foreshorten, pitch, stage sizing +
+         * fin elaboration, hunger desaturation, stress reddening and the
+         * sleeping lid all apply; the stripes ride the flank (fading head-on)
+         * and the eye/mouth ride the head (lx>0, leading/left) through a turn.
+         * Procedural only - polys and ellipses, no heap. */
+        uint32_t edge = mix(fin, 0x2a0a0c, 0.35f);   /* a dark coral edging for the white bands */
+
+        /* fan tail */
+        {
+            float lx[3] = {-12, -27 * tail_len, -27 * tail_len};
+            float ly[3] = {0, -12 - tail * 8, 12 + tail * 8};
+            float xs[3], ys[3];
+            for (int i = 0; i < 3; i++) { xs[i] = TX(lx[i], ly[i]); ys[i] = TY(lx[i], ly[i]); }
+            fill_poly(c, xs, ys, 3, fin);
+        }
+        /* rounded dorsal: adults a small fin, elders a taller one */
+        if (grown) {
+            float h = elder ? -16 : -13;
+            float lx[3] = {5, -2, -9}, ly[3] = {-9, h, -9};
+            float xs[3], ys[3];
+            for (int i = 0; i < 3; i++) { xs[i] = TX(lx[i], ly[i]); ys[i] = TY(lx[i], ly[i]); }
+            fill_poly(c, xs, ys, 3, fin);
+        }
+        /* the clean almond body (a touch fuller than the classic silhouette) */
+        {
+            static const float blx[10] = { 16, 10, 2, -8, -15, -19, -15, -8, 2, 10 };
+            static const float bly[10] = { 0, -8, -11, -10, -6, 0, 6, 10, 11, 8 };
+            float xs[10], ys[10];
+            for (int i = 0; i < 10; i++) { xs[i] = TX(blx[i], bly[i]); ys[i] = TY(blx[i], bly[i]); }
+            fill_poly(c, xs, ys, 10, body);
+            float sm = yaw_at(yh, yt, 2), rx = 4.6f * f->size * sqrtf(fmaxf(0, 1 - sm * sm));
+            if (rx >= 1) fill_ellipse(c, TX(2, 0), TY(2, 0), rx, 10.5f * f->size, body, 255);
+        }
+        /* Nemo white side stripes: three vertical bands on the flank, dark-
+         * edged. Each is a quad in BODY-LOCAL space taken through TX/TY (like
+         * the body polygon itself), so it shares the body's yaw foreshorten AND
+         * pitch rotation and stays inside the silhouette - its half-height is
+         * the body's at that x, trimmed to 0.8 so a coral rim shows top and
+         * bottom. A turn toward the glass compresses the quad's width to
+         * nothing (TX), so the flank fade is geometric, no alpha needed. */
+        {
+            static const float sx[3] = { 7, -1, -9 };   /* behind the head, mid, near the tail */
+            for (int k = 0; k < 3; k++) {
+                float x0 = sx[k];
+                float d = (x0 + 1.5f) / 17.5f, hh = 11.0f * sqrtf(fmaxf(0, 1 - d * d)) * 0.8f;
+                if (hh < 1.5f) continue;
+                const float ew = 1.9f, ww = 1.1f;        /* half-widths (local): dark edging, white band */
+                float exs[4] = { TX(x0-ew,-hh), TX(x0+ew,-hh), TX(x0+ew,hh), TX(x0-ew,hh) };
+                float eys[4] = { TY(x0-ew,-hh), TY(x0+ew,-hh), TY(x0+ew,hh), TY(x0-ew,hh) };
+                fill_poly(c, exs, eys, 4, edge);          /* dark edging */
+                float wxs[4] = { TX(x0-ww,-hh), TX(x0+ww,-hh), TX(x0+ww,hh), TX(x0-ww,hh) };
+                float wys[4] = { TY(x0-ww,-hh), TY(x0+ww,-hh), TY(x0+ww,hh), TY(x0-ww,hh) };
+                fill_poly(c, wxs, wys, 4, 0xffffff);      /* white band */
+            }
+        }
+        /* the big eye (scaled with the fish) + catch-light; a lid when asleep */
+        float er = 2.9f * f->size;
+        if (asleep) {
+            fill_ellipse(c, TX(9, -3), TY(9, -3), er, 0.8f * f->size, 0x9fb4b8, 220);
+        } else {
+            fill_ellipse(c, TX(9, -3), TY(9, -3), er, er, 0xffffff, 255);
+            fill_ellipse(c, TX(9.6f, -3.1f), TY(9.6f, -3.1f), er * 0.60f, er * 0.60f, 0x160606, 255);
+            fill_ellipse(c, TX(8.7f, -3.9f), TY(8.7f, -3.9f), er * 0.24f, er * 0.24f, 0xffffff, 230);  /* catch-light */
+        }
+        /* a little smile on the front flank - fades head-on, hidden asleep */
+        {
+            float s = fabsf(yaw_at(yh, yt, 11));
+            if (s > 0.3f && !asleep) {
+                int a = (int)(200 * (s - 0.3f) / 0.7f);
+                fill_ellipse(c, TX(12, 3.0f), TY(12, 3.0f), 2.1f * f->size, 1.4f * f->size,
+                             0x160606, a + 55 > 255 ? 255 : a + 55);
+                fill_ellipse(c, TX(12, 2.1f), TY(12, 2.1f), 2.4f * f->size, 1.4f * f->size, body, 255);
+            }
+        }
     } else {
     /* tail fin (triangle, flaps with tail phase) */
     {

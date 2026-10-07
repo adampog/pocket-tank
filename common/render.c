@@ -601,6 +601,79 @@ static void draw_fish_core(ctx_t *c, const fish_t *f, float clock, bool asleep, 
         /* a tiny blocky mouth near the nose, hidden asleep */
         if (!asleep) QUAD(12, 2.2f, 15, 4.0f, ink);
 #undef QUAD
+    } else if (f->style == FISH_STYLE_ROUND_BUBBLE) {
+        /* Round Bubble (sol, fish-graphics slice 06): a pufferfish/blobfish -
+         * a near-circular body with a ring of small RIM SPIKES, TWO big derpy
+         * eyes (both on the near/head side) and a small mouth. Everything -
+         * spikes, body, eyes, mouth - rides TX/TY (the running discipline), so
+         * the ring foreshortens with yaw and the whole fish tilts with pitch
+         * and stays coherent. Both eyes sit at lx>0 (the head, leading/left),
+         * so a turn keeps them toward the head, never the tail; both close to a
+         * lid when asleep. The spikes are the cost risk: a ring of small
+         * triangles (transformed polys), no per-pixel work, no heap. */
+        const int NSPIKE = 9;
+        const float R = 11.5f;                           /* body radius (local) */
+        uint32_t ink = mix(fin, 0x1a0812, 0.45f);        /* dark ink for pupils/mouth */
+
+        /* a small tail behind the ball, flapping with the phase */
+        {
+            float lx[3] = {-10, -18 * tail_len, -18 * tail_len}, ly[3] = {0, -7 - tail * 6, 7 + tail * 6};
+            float xs[3], ys[3];
+            for (int i = 0; i < 3; i++) { xs[i] = TX(lx[i], ly[i]); ys[i] = TY(lx[i], ly[i]); }
+            fill_poly(c, xs, ys, 3, fin);
+        }
+        /* the ring of rim spikes: small outward triangles at the body edge,
+         * drawn before the body so only the tips show past the rim. They wobble
+         * a touch with the swim phase so the puffer looks alive. */
+        for (int k = 0; k < NSPIKE; k++) {
+            float a = k * (TAU / NSPIKE) + tail * 0.15f;
+            float ca = cosf(a), sa = sinf(a), da = 0.30f;
+            float tip = (15.5f + tail * 0.8f);
+            float lx[3] = { R * cosf(a - da), R * cosf(a + da), tip * ca };
+            float ly[3] = { R * sinf(a - da), R * sinf(a + da), tip * sa };
+            float xs[3], ys[3];
+            for (int i = 0; i < 3; i++) { xs[i] = TX(lx[i], ly[i]); ys[i] = TY(lx[i], ly[i]); }
+            fill_poly(c, xs, ys, 3, fin);
+        }
+        /* the near-circular body (a 12-gon, a touch wider than tall) */
+        {
+            static const float ang[12] = { 0, 0.5236f, 1.0472f, 1.5708f, 2.0944f, 2.6180f,
+                                           3.1416f, 3.6652f, 4.1888f, 4.7124f, 5.2360f, 5.7596f };
+            float xs[12], ys[12];
+            for (int i = 0; i < 12; i++) {
+                float lx = (R + 0.5f) * cosf(ang[i]), ly = R * sinf(ang[i]);
+                xs[i] = TX(lx, ly); ys[i] = TY(lx, ly);
+            }
+            fill_poly(c, xs, ys, 12, body);
+        }
+        /* two big derpy eyes, both on the head side (lx>0); a lighter underside
+         * dot for the blobfish look, faded head-on */
+        {
+            float s = fabsf(yaw_at(yh, yt, 6));
+            if (s > 0.3f)
+                fill_ellipse(c, TX(0, 6), TY(0, 6), 6.0f * f->size * s, 3.5f * f->size,
+                             mix(body, 0xffffff, 0.28f), (int)(150 * (s - 0.3f) / 0.7f));
+        }
+        float er = 3.1f * f->size;
+        /* eye centres: one forward-high, one a bit back-low - both lx>0 */
+        float e1x = 9.0f, e1y = -3.5f, e2x = 4.0f, e2y = -2.0f;
+        if (asleep) {
+            fill_ellipse(c, TX(e1x, e1y), TY(e1x, e1y), er, 0.8f * f->size, 0x9fb4b8, 220);
+            fill_ellipse(c, TX(e2x, e2y), TY(e2x, e2y), er, 0.8f * f->size, 0x9fb4b8, 220);
+        } else {
+            fill_ellipse(c, TX(e1x, e1y), TY(e1x, e1y), er, er, 0xffffff, 255);
+            fill_ellipse(c, TX(e2x, e2y), TY(e2x, e2y), er, er, 0xffffff, 255);
+            /* derpy: the pupils look slightly different ways */
+            fill_ellipse(c, TX(e1x + 0.9f, e1y + 0.4f), TY(e1x + 0.9f, e1y + 0.4f), er * 0.52f, er * 0.52f, ink, 255);
+            fill_ellipse(c, TX(e2x - 0.6f, e2y + 0.6f), TY(e2x - 0.6f, e2y + 0.6f), er * 0.52f, er * 0.52f, ink, 255);
+            fill_ellipse(c, TX(e1x + 0.4f, e1y - 0.6f), TY(e1x + 0.4f, e1y - 0.6f), er * 0.2f, er * 0.2f, 0xffffff, 230);
+            fill_ellipse(c, TX(e2x - 1.1f, e2y - 0.4f), TY(e2x - 1.1f, e2y - 0.4f), er * 0.2f, er * 0.2f, 0xffffff, 230);
+        }
+        /* a small mouth below the eyes, hidden asleep */
+        if (!asleep) {
+            fill_ellipse(c, TX(9, 2.8f), TY(9, 2.8f), 1.7f * f->size, 1.1f * f->size, ink, 230);
+            fill_ellipse(c, TX(9, 2.0f), TY(9, 2.0f), 2.0f * f->size, 1.1f * f->size, body, 255);
+        }
     } else {
     /* tail fin (triangle, flaps with tail phase) */
     {

@@ -34,6 +34,9 @@ static int    g_resp_fish = -1;
 static bool   g_busy = false;
 static bool   g_pending[N_FISH_MAX];
 static int    g_next = 0;             /* rotation pointer over pending fish */
+/* the roster a request was made against (tank_t.roster_gen): a fish sold
+ * shifts the slots, and a decision asked for the old ones is dropped */
+static uint8_t g_gen, g_req_gen, g_resp_gen;
 bool advisor_llm_narrate = false;     /* --narrate: stream states + decisions */
 
 static void *worker(void *arg) {
@@ -41,7 +44,7 @@ static void *worker(void *arg) {
     for (;;) {
         pthread_mutex_lock(&g_mx);
         while (g_req_fish < 0) pthread_cond_wait(&g_cv, &g_mx);
-        int fish = g_req_fish;
+        int fish = g_req_fish; uint8_t gen = g_req_gen;
         char state[400];
         strcpy(state, g_req_state);
         g_req_fish = -1;
@@ -52,7 +55,7 @@ static void *worker(void *arg) {
 
         pthread_mutex_lock(&g_mx);
         g_resp_goal = g;
-        g_resp_fish = fish;
+        g_resp_fish = fish; g_resp_gen = gen;
         g_busy = false;
         pthread_mutex_unlock(&g_mx);
     }
@@ -123,6 +126,8 @@ goal_t advisor_llm(const tank_t *t, int fish_idx, bool request) {
     if (!g_loaded) return out;
 
     pthread_mutex_lock(&g_mx);
+    if (t->roster_gen != g_gen) { g_gen = t->roster_gen; memset(g_pending, 0, sizeof g_pending); if (g_resp_gen != g_gen) g_resp_fish = -1; }
+    if (g_resp_fish == fish_idx && g_resp_gen != g_gen) g_resp_fish = -1;   /* asked of the slot's last tenant */
     if (g_resp_fish == fish_idx) {            /* finished decision: deliver on any poll */
         if (g_resp_goal.id < GOAL_COUNT) out = g_resp_goal;
         g_resp_fish = -1;
@@ -140,7 +145,7 @@ goal_t advisor_llm(const tank_t *t, int fish_idx, bool request) {
         advisor_core_encode(t, fish_idx, g_req_state, sizeof g_req_state);   /* fresh state */
         if (advisor_llm_narrate)
             printf("\033[0;36m%s sees:\033[0m %s\n", t->fish[fish_idx].name, g_req_state);
-        g_req_fish = fish_idx;
+        g_req_fish = fish_idx; g_req_gen = g_gen;
         pthread_cond_signal(&g_cv);
     }
     pthread_mutex_unlock(&g_mx);

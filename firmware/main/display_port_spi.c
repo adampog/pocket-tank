@@ -137,6 +137,27 @@ void display_port_wake(void) {
     backlight_set(s_brightness);
 }
 
+/* ---- upstream render/sleep API, re-applied for the fork's rectangle boards ----
+ * The 1.8/round/watch QSPI driver (display_port_sh8601.c) grew these for the
+ * paginated round/watch view and the granular night sleepcfg (main.c
+ * deep_sleep_now). The CYD/TLCD2 SPI panel has no round/watch view and no QSPI
+ * bus to hold; its deep sleep is the panel sleep-in (display_port_sleep, above)
+ * plus main.c's global gpio_deep_sleep_hold_en() that holds EVERY digital pad -
+ * exactly the fork's prior behaviour (the 2026-09-16 deep-sleep work). So these
+ * are the rectangle-board forms: predicates false, the view fixed to FIT, and
+ * the per-peripheral deep-sleep hooks no-ops (the global pad hold still fires).
+ * Standby current stays what the fork measured; flash-time review in HANDOFF. */
+bool board_is_round(void)     { return false; }
+bool board_is_watch(void)     { return false; }
+bool board_has_expander(void) { return false; }   /* no IO expander on the CYD / TLCD2 */
+int  board_pwr_sense_pin(void) { return -1; }      /* no PWR-key sense line (-1 = none) */
+void display_port_set_view(int view) { (void)view; }      /* rectangle panel: always FIT */
+int  display_port_view(void) { return DISPLAY_VIEW_FIT; }
+void display_port_flush_prof(int64_t *wait_us, int64_t *send_us) { *wait_us = *send_us = 0; }
+void display_port_deep_standby(void) { }                  /* panel already slept (display_port_sleep); no CO5300 deep-standby on this panel */
+void display_port_deep_sleep_bus(void) { }                /* the SPI bus pads are held by main.c's gpio_deep_sleep_hold_en() */
+void display_port_deep_sleep_pins(bool tp_awake_high) { (void)tp_awake_high; }   /* ditto: the global digital-pad hold covers the panel + touch reset */
+
 void display_port_set_inverted(bool inverted) { s_inverted = inverted; }
 
 void display_port_set_brightness(uint8_t level) {

@@ -34,3 +34,4 @@ What is here:
 | `2026-09-29-1656.sav` | a synthetic tank with every tail set: 5 fish, names, a custom color, parents and a welcome still owed, every shop item placed, a colored coral, a cluster look, 271 sand dollars |
 | `2026-09-29-1664-shrimp.sav` | the 1656 tank above, loaded and saved by the shrimp build: plus a school of 6 shrimp, 7 pellets toward the next, 321 s of cooldown |
 | `2026-09-29-1672-v0.2.0.sav` | the release save for **v0.2.0**: the shrimp tank above loaded and saved by the 0.2.0 build (release stamp 0x000200 at 1664) |
+| `2026-10-02-1688-urchin.sav` | the v0.2.0 save above grown to 1688 (built by hand from it: the watch's SCREEN byte 0, then the urchin tail): the urchin bought (unlock bit 6), at x 212, 4321.5 px of grass eaten |

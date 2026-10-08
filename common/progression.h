@@ -44,6 +44,7 @@ int64_t clock_port_now_unix(void);                         /* 0 if unknown */
 /* the release (version.h PT_RELEASE_NUM) of the build that wrote the save
  * the last load read - 0 for a save from before release numbers, or none */
 uint32_t progression_loaded_release(void);
+int64_t  progression_loaded_unix(void);                    /* the loaded save's wall-clock stamp, 0 = none (a clockless board seeds its clock from it) */
 const char *version_port_string(void);                     /* the build's git describe (device: the app
                                                             * descriptor; sim: PT_VERSION) - the settings page */
 
@@ -195,6 +196,7 @@ const char *const *progression_fry_tip(int kind);
 #define SD_PRICE_CORAL 100
 #define SD_PRICE_CLUSTER 240
 #define SD_PRICE_SHRIMP 180       /* 2026-09-29, Strato (first 300, then 180) */
+#define SD_PRICE_URCHIN 120       /* 2026-10-02: the grass's snail (the snail is 80, the grass pays 25 per 250 cm) */
 typedef struct {
     uint32_t    bit;               /* SD_ITEM_* */
     const char *name;              /* <= 12 chars, the pixel font */
@@ -213,6 +215,26 @@ bool progression_buy(tank_t *t, int item);
 #define SD_SELL_PCT 20
 int  progression_sell_value(int item);
 bool progression_sell(tank_t *t, int item);
+/* a fish sold (2026-10-01, Strato: a SELL button on the milestones page's
+ * fish card - "the more mature a fish is, the more sand dollars it is
+ * worth. once a fish is sold it opens up a slot for a new fry"). The price
+ * is its stage's; the dollars are earnings (the toast shows them). The tank
+ * always keeps FISH_KEEP_MIN fish - a pair to court - and a fry still owed
+ * its welcome holds every sale until it has been named. The fish after it
+ * move down a slot (tank_remove_fish), a staged arrival is called off, and
+ * the slot is EARNED again: the next fry's MEALS gate waits for
+ * SELL_FRY_MEALS meals more than the tank had eaten at the sale (the first
+ * fry's dozen), so a grown tank - every other gate long met - does not hand
+ * a fry straight back. Saved at once. */
+#define SD_FISH_FRY    5
+#define SD_FISH_JUV    15
+#define SD_FISH_ADULT  30
+#define SD_FISH_ELDER  60
+#define FISH_KEEP_MIN  2
+#define SELL_FRY_MEALS 12
+int  progression_fish_value(const tank_t *t, int fish);      /* what it would fetch now */
+bool progression_fish_sellable(const tank_t *t, int fish);   /* false: the last pair, or a welcome is owed */
+bool progression_sell_fish(tank_t *t, int fish);
 /* dollars awarded since the last call (the toast over the live tank) */
 int  progression_sd_take_award(void);
 /* director / tests: dollars from nowhere (negative takes them away) */

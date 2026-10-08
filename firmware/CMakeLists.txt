@@ -11,4 +11,9 @@ execute_process(COMMAND git describe --always --dirty --exclude=*
 if(PT_BUILD_ID)
     set(PROJECT_VER ${PT_BUILD_ID})
 endif()
+# execute_process runs at configure time only: without this, a build after a
+# new commit keeps the previous id (2026-09-30: the tank reported bb7751a from
+# a 092a913 tree). A change of HEAD or of the branch's ref reconfigures.
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+             ${CMAKE_CURRENT_LIST_DIR}/../.git/HEAD ${CMAKE_CURRENT_LIST_DIR}/../.git/index)
 project(pocket_tank)

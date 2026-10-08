@@ -33,5 +33,6 @@ void imu_port_last(int16_t out[3], int *motion);  /* the last poll's raw sample 
  * reconfigure on wake so it never resumes on trust. */
 void imu_port_sleep(void);
 void imu_port_wake(void);
+void imu_port_power_down(void);   /* deep sleep only: the 2 MHz clock off too (~50 -> ~20 uA); the wake is a reboot */
 
 #endif

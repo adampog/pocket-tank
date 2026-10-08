@@ -19,6 +19,9 @@ static SemaphoreHandle_t g_mx, g_req_sem;
 static char g_req_state[400]; static int g_req_fish = -1;
 static goal_t g_resp_goal; static int g_resp_fish = -1; static bool g_busy;
 static bool g_pending[N_FISH_MAX]; static int g_next;
+/* the roster a request was made against (tank_t.roster_gen): a fish sold
+ * shifts the slots, and a decision asked for the old ones is dropped */
+static uint8_t g_gen, g_req_gen, g_resp_gen;
 static uint32_t g_decisions, g_last_ms; static float g_tok_s;
 
 static void *psram_alloc(size_t n) {
@@ -38,7 +41,7 @@ static void worker(void *arg) {
     for (;;) {
         xSemaphoreTake(g_req_sem, portMAX_DELAY);
         xSemaphoreTake(g_mx, portMAX_DELAY);
-        int fish = g_req_fish; char st[400]; strcpy(st, g_req_state); g_req_fish = -1; g_busy = true;
+        int fish = g_req_fish; uint8_t gen = g_req_gen; char st[400]; strcpy(st, g_req_state); g_req_fish = -1; g_busy = true;
         xSemaphoreGive(g_mx);
         int ntok = 0; int64_t t0 = esp_timer_get_time();
         memset(q4_prof_us, 0, sizeof q4_prof_us);
@@ -52,7 +55,7 @@ static void worker(void *arg) {
                  q4_prof_us[0] / 1000, q4_prof_us[1] / 1000, q4_prof_us[2] / 1000,
                  q4_prof_us[3] / 1000, q4_prof_us[4] / 1000, q4_prof_us[5] / 1000);
         xSemaphoreTake(g_mx, portMAX_DELAY);
-        g_resp_goal = g; g_resp_fish = fish; g_busy = false; g_decisions++;
+        g_resp_goal = g; g_resp_fish = fish; g_resp_gen = gen; g_busy = false; g_decisions++;
         xSemaphoreGive(g_mx);
     }
 }
@@ -102,6 +105,8 @@ goal_t advisor_llm_esp(const tank_t *t, int fish_idx, bool request) {
     goal_t out = f->goal;
     if (!g_ok) return out;
     xSemaphoreTake(g_mx, portMAX_DELAY);
+    if (t->roster_gen != g_gen) { g_gen = t->roster_gen; memset(g_pending, 0, sizeof g_pending); if (g_resp_gen != g_gen) g_resp_fish = -1; }
+    if (g_resp_fish == fish_idx && g_resp_gen != g_gen) g_resp_fish = -1;   /* asked of the slot's last tenant */
     if (g_resp_fish == fish_idx) {
         if (g_resp_goal.id < GOAL_COUNT) out = g_resp_goal;
         g_resp_fish = -1;
@@ -111,7 +116,7 @@ goal_t advisor_llm_esp(const tank_t *t, int fish_idx, bool request) {
         g_pending[fish_idx] = false;
         g_next = (fish_idx + 1) % (t->n_fish > 0 ? t->n_fish : 1);
         advisor_core_encode(t, fish_idx, g_req_state, sizeof g_req_state);
-        g_req_fish = fish_idx;
+        g_req_fish = fish_idx; g_req_gen = g_gen;
         xSemaphoreGive(g_req_sem);
     }
     xSemaphoreGive(g_mx);

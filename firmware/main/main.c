@@ -26,6 +26,12 @@
 #include "battery.h"
 #include "imu_port.h"
 #include "director.h"
+#include "update.h"
+#include "update_mode.h"
+#include "net_time.h"
+#include <sys/time.h>
+#include "model_trailer.h"
+#include "esp_ota_ops.h"
 #include "brightness.h"
 #include "orientation.h"
 #include "batlog.h"
@@ -37,6 +43,7 @@
 #include "tank_events.h"
 #include "setup.h"
 #include "nvs_flash.h"
+#include "nvs.h"
 #include "esp_app_desc.h"
 #include "version.h"
 #include "rtc_port.h"
@@ -57,6 +64,13 @@
 static bool s_pmic;                        /* an AXP2101 answered: the PWR key exists, power-off is real */
 static bool s_imu;                         /* an IMU answered: it turns the picture (and, on the CYD, the face-down gesture) */
 static bool s_sleep_by_face;               /* the next sleep was the face-down gesture: face up wakes it */
+static bool s_rtc;                         /* an RTC chip answered: the wall clock survives a PMIC power-off. Without one
+                                              (the round 1.75C) the night is a DEEP sleep - the ESP32's own clock keeps
+                                              the time - and only the PWR key's long press cuts the power */
+#include "board_pins.h"
+#define PWR_SENSE ((gpio_num_t)board_pwr_sense_pin())   /* the round board and the watch: a line that is high while the PWR key is down */
+static bool pwr_sensed(void) { return board_pwr_sense_pin() >= 0; }
+static bool pwr_sense_down(void) { return pwr_sensed() && gpio_get_level(PWR_SENSE); }
 #if defined(CONFIG_POCKET_TANK_DISPLAY_SH8601) || defined(CONFIG_POCKET_TANK_DISPLAY_ILI9341) || defined(CONFIG_POCKET_TANK_DISPLAY_ST7789)
 extern i2c_master_bus_handle_t board_i2c_bus(void);
 #else
@@ -138,6 +152,10 @@ static bool s_btn_used;   /* this press opened the reset prompt: no drowse, no p
  *  makes esp-idf isolate every other digital pad: un-isolated, deep sleep
  *  drew ~15 mA by the batlog, three times the light-sleep drowse it replaced. */
 #define SLEEP_GRACE_US    (20LL * 60 * 1000000)  /* 2026-09-16: was 90 s; see the note above */
+#define SLEEP_GRACE_CLOCKLESS_US (60LL * 60 * 1000000)   /* the round board (no RTC chip, 2026-10-03): its power-off wakes
+                                                          through a few seconds of Wi-Fi for the time, so the in-place
+                                                          wake lasts an hour (Strato: 20 min "feels cumbersome" there;
+                                                          the boards with a clock chip wake seamlessly and keep 20) */
 #define DIRECTOR_GRACE_US (5LL * 1000000)     /* `deepsleep N`: straight to stage 2 */
 #define KEY_POLL_US       (1000000LL)         /* the grace wakes once a second to ask the PMIC about the PWR key */
 static int battery_pct(void) { float f; bool c; return battery_port_read(&f, &c) ? (int)(f * 100 + 0.5f) : -1; }
@@ -172,6 +190,111 @@ static int restore_fish(void) {
     snap_log("wake restored");
     return n;
 }
+/* THE CLOCKLESS NIGHT (the round 1.75C, 2026-10-03). Its deep sleep draws
+ * ~8 mA (an 8 h night costs ~14% of its 500 mAh), and nothing the firmware
+ * can switch off explains it (docs/board-amoled-1.75c.md); the PMIC power-off
+ * draws next to nothing but stops the board's only clock - and frozen time is
+ * no option (Strato: the tanks must not drift apart). So with a saved Wi-Fi
+ * network the night is the power-off, and the boot after it asks the internet
+ * for the time (net_time_sync, a few seconds on a dark glass before the tank
+ * exists). Kept in NVS:
+ *   "netclk" = 1 once a sync has put the clock on real time. The FIRST sync
+ *     only re-bases the stand-in clock (seeded from the build time or a save):
+ *     nothing is lived for that jump. After it, every gap between a save's
+ *     stamp and the internet's now is real time away.
+ *   "netok"  = the last try worked. Only then is the night a power-off (the
+ *     network was there this morning); otherwise a deep sleep with the clock
+ *     running, as before, and every wake tries again.
+ * A failed sync after a power-off resumes the clock at the save (rtc_port_seed):
+ * the stretch is owed, not lost - the clock now lags real time by exactly
+ * that much, and the next good sync lives it through. */
+static int nvs_u8(const char *key, int dflt) {
+    nvs_handle_t h; uint8_t v = (uint8_t)dflt;
+    if (nvs_open("tank", NVS_READONLY, &h) == ESP_OK) { nvs_get_u8(h, key, &v); nvs_close(h); }
+    return v;
+}
+static void nvs_u8_put(const char *key, int v) {
+    nvs_handle_t h;
+    if (nvs_open("tank", NVS_READWRITE, &h) == ESP_OK) { nvs_set_u8(h, key, (uint8_t)v); nvs_commit(h); nvs_close(h); }
+}
+static bool net_saved(void) { char s[NET_SSID_MAX + 1], p[NET_PASS_MAX + 1]; return net_port_creds_get(s, p); }
+static bool night_powers_off(void) {        /* the night: a power-off (the clock survives it, or the internet gives it back) */
+    if (!s_pmic) return false;
+    return s_rtc || (net_saved() && nvs_u8("netclk", 0) && nvs_u8("netok", 0));
+}
+static int64_t s_rebase_unix, s_rebase_us;  /* a first sync, applied once the save has loaded on the old clock */
+static float s_boot_lived_h;
+static char s_boot_sync[96] = "no sync at this boot";   /* what this boot's sync did, for `clock` (the USB log of a boot off the cable is gone) */
+/* The sync runs in a worker; the glass is drawn by the boot task alone. The
+ * panel driver is one task's at a time (esp_lcd's SPI io keeps a plain
+ * in-flight count and takes the bus per call): 0.3.2 drew this page from its
+ * own task and let the boot go on after 0.5 s whether the page had stopped
+ * or not - a frame still on the wire met the tank's first frame, both waited
+ * on the bus for good, and the pendant froze on CHECKING THE TIME (three
+ * times, found halted 2026-10-06: syncscr and tank both in spi_device_acquire_bus). */
+static volatile bool s_sync_finished;
+static bool s_sync_ok;
+static int64_t s_sync_u, s_sync_at;
+static TaskHandle_t s_sync_waiter;
+static void sync_worker(void *arg) {
+    (void)arg;
+    s_sync_ok = net_time_sync(&s_sync_u, &s_sync_at);
+    s_sync_finished = true;
+    xTaskNotifyGive(s_sync_waiter);
+    vTaskDelete(NULL);
+}
+static void net_clock_boot(uint16_t *fb) {  /* before the tank exists: the radio has the internal heap to itself */
+    if (s_rtc || !s_pmic || !net_saved()) return;
+    bool real = nvs_u8("netclk", 0), set = clock_port_now_unix() != 0, ok_before = nvs_u8("netok", 0);
+    if (real && set && ok_before) return;    /* a deep-sleep wake on a good clock: it ran all night */
+    int64_t u = 0, at = 0;
+    bool ok;
+    s_sync_finished = false; s_sync_waiter = xTaskGetCurrentTaskHandle();
+    if (fb && xTaskCreatePinnedToCore(sync_worker, "timesync", 8192, NULL, 5, NULL, 1) == pdPASS) {
+        int64_t t0 = esp_timer_get_time();
+        brightness_apply(false);
+        do {                                 /* the page until the worker is done - no time limit: the tank never shares the panel */
+            render_clock_sync(fb, TANK_W, (esp_timer_get_time() - t0) / 1e6f);
+            display_port_flush(fb);
+            ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(40));
+        } while (!s_sync_finished);
+        u = s_sync_u; at = s_sync_at; ok = s_sync_ok;
+    } else ok = net_time_sync(&u, &at);      /* no glass (or no task): ask in place */
+    nvs_u8_put("netok", ok);
+    snprintf(s_boot_sync, sizeof s_boot_sync, "%s", ok ? "got the time" : "FAILED: no network or no answer");
+    if (!ok) {
+        ESP_LOGW(TAG, "clock: no time from the internet - %s; tonight is a deep sleep, the next wake asks again",
+                 set ? "the clock runs on as it was" : "it resumes at the save, the stretch is owed");
+        return;
+    }
+    int64_t now = u + (esp_timer_get_time() - at) / 1000000;
+    if (real) {
+        int64_t was = clock_port_now_unix();
+        struct timeval tv = { .tv_sec = (time_t)now }; settimeofday(&tv, NULL);
+        ESP_LOGI(TAG, "clock: set from the internet (%s) - the time away is lived through at this boot",
+                 was ? "it had run on" : "it had stopped with the power");
+        if (was) ESP_LOGI(TAG, "clock: it was %lld s %s", (long long)(now > was ? now - was : was - now), now >= was ? "behind (owed time, lived now)" : "ahead");
+        snprintf(s_boot_sync, sizeof s_boot_sync, "got the time: %s", was ? "the clock had run on (corrected)" : "the clock had stopped (the time away lived from the save)");
+    } else {
+        s_rebase_unix = u; s_rebase_us = at;
+        ESP_LOGI(TAG, "clock: first time from the internet - the clock moves to it once the tank is loaded, with nothing lived for the jump");
+        snprintf(s_boot_sync, sizeof s_boot_sync, "got the time: the FIRST sync (clock moved, nothing lived)");
+    }
+}
+static void net_clock_rebase(void) {        /* after progression_boot / _wake: a first sync takes over the clock */
+    if (!s_rebase_us) return;
+    struct timeval tv = { .tv_sec = (time_t)(s_rebase_unix + (esp_timer_get_time() - s_rebase_us) / 1000000) };
+    settimeofday(&tv, NULL);
+    nvs_u8_put("netclk", 1);
+    s_rebase_us = 0;
+    ESP_LOGI(TAG, "clock: on real time from now on - nights can be a power-off");
+}
+void device_clock_log(void) {               /* director `clock` */
+    ESP_LOGI(TAG, "clock: this boot %s | lived at boot %.2f h | now %lld | RTC chip %s | network %s | real time %s | last sync %s | tonight: %s",
+             s_boot_sync, s_boot_lived_h, (long long)clock_port_now_unix(), s_rtc ? "yes" : "no", net_saved() ? "saved" : "none",
+             nvs_u8("netclk", 0) ? "yes" : "not yet", nvs_u8("netok", 0) ? "ok" : "failed or never",
+             night_powers_off() ? "power-off" : "deep sleep, the clock running");
+}
 static void enter_sleep_for(int wake_after_s) {
     /* the face-down gesture's sleep: the IMU stays awake through the grace so
        turning the screen up can wake the tank (the CYD, no PMIC: no rails
@@ -184,10 +307,11 @@ static void enter_sleep_for(int wake_after_s) {
     if (!by_face && orientation_face_sleep() && imu_port_face_down_now() == 1) by_face = true;
 #endif
     int pct0 = battery_pct(), mv0 = battery_port_vbat_mv();
-    int64_t grace_us = wake_after_s > 0 ? DIRECTOR_GRACE_US : SLEEP_GRACE_US;
+    int64_t grace_us = wake_after_s > 0 ? DIRECTOR_GRACE_US : s_rtc ? SLEEP_GRACE_US : SLEEP_GRACE_CLOCKLESS_US;
     ESP_LOGI(TAG, "sleep: save, panel off, %d s grace then %s | battery %d%% %d mV",
              (int)(grace_us / 1000000),
-             wake_after_s > 0 ? "deep sleep with the timer" : s_pmic ? "PMIC power-off (the PWR key boots it)" : "deep sleep (BOOT wakes)", pct0, mv0);
+             wake_after_s > 0 ? "deep sleep with the timer" : night_powers_off() ? (s_rtc ? "PMIC power-off (the PWR key boots it)" : "PMIC power-off (the PWR key boots it; the internet gives the time back)")
+             : pwr_sensed() ? "deep sleep (the PWR key wakes; the clock runs on)" : "deep sleep (BOOT wakes)", pct0, mv0);
     touch_port_confirm_answer(-1);              /* an open reset prompt is a NO */
     if (!progression_save(&tank))               /* never cancels: a tank that can't save (NVS down, a save that
                                                    wouldn't load) must still sleep, or the key goes dead */
@@ -198,8 +322,9 @@ static void enter_sleep_for(int wake_after_s) {
     batlog_add(pct0, mv0, display_port_brightness(), true, "sleep");
     if (!by_face) imu_port_sleep();   /* quiesce BEFORE the rails cycle (latch-up guard) */
     display_port_sleep();
-    while (!gpio_get_level(BTN_SLEEP)) vTaskDelay(pdMS_TO_TICKS(10));   /* wake triggers are level-low: never arm them held */
+    while (!gpio_get_level(BTN_SLEEP) || pwr_sense_down()) vTaskDelay(pdMS_TO_TICKS(10));   /* wake triggers are levels: never arm them held */
     vTaskDelay(pdMS_TO_TICKS(30));
+    while (battery_port_key_poll()) { }         /* the press that asked for this sleep is not the one that ends it */
     /* stage 1: the grace, RAM alive - light sleep in 1 s slices, each wake a
        one-byte I2C read of the PMIC's IRQ status for the PWR key (no IRQ line
        to the chip is needed); BOOT (gpio, level low) wakes it too for the
@@ -210,11 +335,13 @@ static void enter_sleep_for(int wake_after_s) {
         int64_t left = grace_us - (esp_timer_get_time() - t0);
         if (left <= 0) break;
         gpio_wakeup_enable(BTN_SLEEP, GPIO_INTR_LOW_LEVEL);
+        if (pwr_sensed()) gpio_wakeup_enable(PWR_SENSE, GPIO_INTR_HIGH_LEVEL);   /* the PWR key itself: no second of polling to wait out */
         esp_sleep_enable_gpio_wakeup();
         esp_sleep_enable_timer_wakeup(left < KEY_POLL_US ? left : KEY_POLL_US);
         esp_light_sleep_start();
         esp_sleep_wakeup_cause_t why = esp_sleep_get_wakeup_cause();
         gpio_wakeup_disable(BTN_SLEEP);
+        if (pwr_sensed()) gpio_wakeup_disable(PWR_SENSE);
         /* wake sources are STICKY in ESP-IDF (s_config.wakeup_triggers): the
          * grace's timer would otherwise follow us into stage 2 and boot the
          * tank 90 s later - which it did (2026-09-14: every sleep since the
@@ -231,7 +358,8 @@ static void enter_sleep_for(int wake_after_s) {
         }
     }
     if (pressed) {                              /* a quick wake: resume in place */
-        while (!gpio_get_level(BTN_SLEEP)) vTaskDelay(pdMS_TO_TICKS(10));   /* a BOOT wake press, still down */
+        while (!gpio_get_level(BTN_SLEEP) || pwr_sense_down()) vTaskDelay(pdMS_TO_TICKS(10));   /* the wake press, still down */
+        if (pwr_sensed()) { vTaskDelay(pdMS_TO_TICKS(80)); while (battery_port_key_poll()) { } }   /* ... and the PMIC's own note of it: not a new sleep press */
         float napped = (esp_timer_get_time() - t0) / 1e6f;
         tank_tick_sleep(&tank, napped);         /* the nap counts, tiny as it is */
         progression_woke(&tank);                /* a fry that was on its way: born now (2026-09-24) */
@@ -247,7 +375,7 @@ static void enter_sleep_for(int wake_after_s) {
        RTC clock cover the whole dark stretch at the next boot. The IMU kept
        awake for a face-down wake sleeps now: deep sleep cannot hear it. */
     if (by_face) imu_port_sleep();
-    if (wake_after_s <= 0 && s_pmic) {
+    if (wake_after_s <= 0 && night_powers_off()) {
         batlog_add(battery_pct(), battery_port_vbat_mv(), 0, true, "off");   /* mirrored to NVS: the morning reads it back */
         ESP_LOGI(TAG, "grace over: PMIC power-off (the PWR key or USB boots the tank; the night is lived through at that boot)");
         vTaskDelay(pdMS_TO_TICKS(20));
@@ -262,10 +390,46 @@ static void enter_sleep(void) { enter_sleep_for(0); }
    other digital pad (input, output and pulls off) - the light-sleep drowse
    kept them driven, the first deep-sleep build left them neither, and the
    board around the chip drew ~15 mA all night (2026-09-15/16). */
+/* what the round board's night turns off besides the ESP32 (2026-10-02: the
+ * first night lost 21% in 12 h, ~15x the 1.8's power-off). Each saving is a
+ * bit so a night (or a `deepsleep N` window) can measure one against the
+ * other: director `sleepcfg <mask>`, kept in NVS. The batlog's deep row
+ * carries the mask ("deep 7"). */
+enum { SLEEP_TOUCH = 1, SLEEP_PANEL = 2, SLEEP_IMU = 4, SLEEP_BUS = 8, SLEEP_ALL = 15 };
+static int sleep_cfg(void) {
+    nvs_handle_t h; uint8_t v = SLEEP_ALL;
+    if (nvs_open("tank", NVS_READONLY, &h) == ESP_OK) { nvs_get_u8(h, "sleepcfg", &v); nvs_close(h); }
+    return v & SLEEP_ALL;
+}
+int device_sleep_cfg(int mask) {
+    if (mask >= 0) {
+        nvs_handle_t h;
+        if (nvs_open("tank", NVS_READWRITE, &h) == ESP_OK) { nvs_set_u8(h, "sleepcfg", (uint8_t)(mask & SLEEP_ALL)); nvs_commit(h); nvs_close(h); }
+    }
+    return sleep_cfg();
+}
 static void deep_sleep_now(int wake_after_s) {
-    ESP_LOGI(TAG, "deep sleep (BOOT wakes%s)", wake_after_s > 0 ? ", or the timer" : "");
-    rtc_gpio_pullup_en(BTN_SLEEP); rtc_gpio_pulldown_dis(BTN_SLEEP);
-    esp_sleep_enable_ext0_wakeup(BTN_SLEEP, 0);
+    if (pwr_sensed()) {                         /* the PWR key's sense line (driven both ways by the board: no pull) wakes it,
+                                                   as ext1 - the RTC peripherals can power down, which ext0 would keep up */
+        int cfg = sleep_cfg();
+        bool tp_slept = (cfg & SLEEP_TOUCH) && touch_port_deep_sleep();
+        if (cfg & SLEEP_PANEL) display_port_deep_standby();
+        if (cfg & SLEEP_IMU) imu_port_power_down();
+        if (cfg & SLEEP_BUS) display_port_deep_sleep_bus();   /* after the deep standby: that command needs the bus */
+        char why[8]; snprintf(why, sizeof why, "deep %d", tp_slept ? cfg : cfg & ~SLEEP_TOUCH);   /* what took: the log is gone with the USB port */
+        batlog_add(battery_pct(), battery_port_vbat_mv(), 0, true, why);   /* mirrored to NVS: the wake reads the night's cost back */
+        ESP_LOGI(TAG, "deep sleep (the PWR key wakes%s) | touch %s, panel %s, IMU %s (sleepcfg %d)", wake_after_s > 0 ? ", or the timer" : "",
+                 tp_slept ? "asleep" : "in reset", cfg & SLEEP_PANEL ? "deep standby" : "sleep-in",
+                 cfg & SLEEP_IMU ? "powered down" : "sensors off", cfg);
+        if (cfg & SLEEP_BUS) ESP_LOGI(TAG, "QSPI clock + data held low");
+        rtc_gpio_pullup_dis(PWR_SENSE); rtc_gpio_pulldown_dis(PWR_SENSE);
+        esp_sleep_enable_ext1_wakeup(1ULL << PWR_SENSE, ESP_EXT1_WAKEUP_ANY_HIGH);
+        display_port_deep_sleep_pins(tp_slept);
+    } else {
+        ESP_LOGI(TAG, "deep sleep (BOOT wakes%s)", wake_after_s > 0 ? ", or the timer" : "");
+        rtc_gpio_pullup_en(BTN_SLEEP); rtc_gpio_pulldown_dis(BTN_SLEEP);
+        esp_sleep_enable_ext0_wakeup(BTN_SLEEP, 0);
+    }
     if (wake_after_s > 0) esp_sleep_enable_timer_wakeup((int64_t)wake_after_s * 1000000);
     audio_port_deep_sleep_pins();
     gpio_deep_sleep_hold_en();
@@ -414,6 +578,8 @@ static void battery_frame(int64_t now) {
     else edge = BAT_ON_POWER(s_bat_state) == was_power ? 0 : BAT_ON_POWER(s_bat_state) ? 1 : -1;
     was_power = BAT_ON_POWER(s_bat_state);
     if (edge > 0) { s_bat_popup_us = now + BAT_POPUP_S * 1000000LL;
+                    audio_port_play(SND_LOW_BATTERY, AUDIO_PITCH_ONE);   /* the cable is in: the battery's tone (0.3.2; the low notice's, a
+                                                                            benign chime that serves any battery news) */
                     ESP_LOGI(TAG, "battery: cable in at %d%% (%s) - the pill shows %d s", pct, s_bat_state == BAT_CHARGING ? "charging" : s_bat_state == BAT_FULL ? "full" : "not charging", BAT_POPUP_S); }
     else if (edge < 0) ESP_LOGI(TAG, "battery: unplugged at %d%%", pct);
     if (battery_take_save(&s_bh)) bat_hist_save();
@@ -439,14 +605,30 @@ static void reset_tank(void) {
     setup_begin(&tank);                         /* welcome, names, colours - as on a fresh install */
 }
 
+static void request_update(void);        /* below: CHECK FOR UPDATES */
+static void tank_task(void *arg);
+static void start_tank_task(void *arg) {
+    (void)arg;
+    ESP_LOGI(TAG, "starting the tank task: internal heap %u KB free (largest block %u KB)",
+             (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL) / 1024, (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL) / 1024);
+    if (xTaskCreatePinnedToCore(tank_task, "tank", 12288, NULL, 4, NULL, 0) != pdPASS)
+        ESP_LOGE(TAG, "THE TANK TASK COULD NOT START: no internal RAM for its stack");
+}
+#define FRAME_MIN_MS 40                      /* the frame rate's ceiling: 25 fps (see the loop's foot) */
 static void tank_task(void *arg) {
     (void)arg;
     int64_t last = esp_timer_get_time(); int cur = 0;
     int64_t last_log = last;
     int64_t render_us = 0, flush_us = 0, card_us = 0; uint32_t frames = 0, card_frames = 0;
+    /* the rest of the frame (2026-10-03: render + flush were ~36 ms of a ~50 ms frame, the other ~14 untimed):
+       the polls (keys, IMU, touch, the console), the tank's tick, the wait for the scene prefetch, what
+       follows the flush (the next prefetch, this log), and the frame's sleep */
+    int64_t polls_us = 0, tick_us = 0, wait_us = 0, tail_us = 0, sleep_us = 0, slept_from = 0;
+    ESP_LOGI(TAG, "tank task up | heap int %u KB", (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL) / 1024);
     for (;;) {
         int64_t now = esp_timer_get_time();
         float dt = (now - last) / 1e6f; last = now; if (dt > 0.25f) dt = 0.25f;
+        if (slept_from) sleep_us += now - slept_from;
         sleep_button_poll(now);
         pwr_key_poll(now);
         imu_port_poll(now);
@@ -466,7 +648,13 @@ static void tank_task(void *arg) {
 #elif CONFIG_POCKET_TANK_IMU_AUTO_FLIP
         bool inv = imu_port_inverted() != orientation_flipped();   /* the IMU's flip, turned again by the keeper's SCREEN choice */
 #else
-        bool inv = orientation_flipped();   /* no auto-flip: the keeper's SCREEN choice alone (the IMU still senses handling) */
+        /* upstream's 0.3.2 default: the live flip, or the settings' ROTATION
+           lock (tank_orient); the worn watch uses the keeper's SCREEN setting. */
+        bool inv = tank_orient(&tank, imu_port_inverted());
+#ifdef TANK_WATCH
+        inv = tank_screen_turned(&tank);  /* worn on a wrist the live flip never runs (the arm swings through every angle):
+                                             the way up is the keeper's setting, or what AUTO learned from the taps (tank.h) */
+#endif
 #endif
         display_port_set_inverted(inv);   /* per-frame, so a flip lands between flushes */
         touch_port_set_inverted(inv);
@@ -480,8 +668,11 @@ static void tank_task(void *arg) {
           else if (w == SET_TAP_VOLUME) { audio_port_set_volume(v); if (v) audio_port_play(SND_CONFIRM, AUDIO_PITCH_ONE); }
           else if (w == SET_TAP_LIGHT) ESP_LOGI(TAG, "settings: lights out %s", v ? "AUTO (the idle rule)" : "MANUAL (double-tap the glass)");
           else if (w == SET_TAP_IDLE) ESP_LOGI(TAG, "settings: lights out after %d s still", v);
+          else if (w == SET_TAP_FEED) ESP_LOGI(TAG, "settings: auto feed %s", v ? "ON" : "OFF (the keeper feeds; a starving fish loses trust)");
+          else if (w == SET_TAP_ROTATE) ESP_LOGI(TAG, "settings: rotation %s", v ? (tank.orient_inv ? "LOCKED (turned over)" : "LOCKED (upright)") : "unlocked (the picture follows the tank)");
           else if (w == SET_TAP_FLIP) orientation_set(v != 0);
           else if (w == SET_TAP_FACE) orientation_set_face_sleep(v != 0); }
+        if (touch_port_take_update() == UPD_TAP_CHECK) request_update();   /* the updates page's CHECK: save, restart into update mode */
         { int r = touch_port_take_shop();                               /* the shop's UNLOCK / MOVE / SELL */
           if (r >= SHOP_TAP_SELL) {                                     /* sold back: the refund, the piece gone, the row for sale again */
               int item = r - SHOP_TAP_SELL;
@@ -502,8 +693,9 @@ static void tank_task(void *arg) {
         brightness_apply(tank.night);
         { static int64_t last_bat; if (now - last_bat > 5LL * 60 * 1000000) {   /* battery log: awake sample every 5 min */
             batlog_add(battery_pct(), battery_port_vbat_mv(), display_port_brightness(), false, last_bat ? "" : "boot"); last_bat = now; } }
+        int64_t pf_tick = esp_timer_get_time(); polls_us += pf_tick - now;
         tank.hold_light = setup_active() || touch_port_confirm_up();   /* no lights-out mid-name */
-        tank.ui_cover = tank.hold_light || touch_port_milestones() || touch_port_settings() || touch_port_shop() || touch_port_battery();   /* a fry's spawning waits */
+        tank.ui_cover = tank.hold_light || touch_port_milestones() || touch_port_settings() || touch_port_updates() || touch_port_shop() || touch_port_battery();   /* a fry's spawning waits */
         tank_tick(&tank, dt, llm_ok ? advisor_llm_esp : advisor_rules);
         progression_tick(&tank, dt);
         battery_frame(now);
@@ -522,6 +714,8 @@ static void tank_task(void *arg) {
             if (nb >= 0) { touch_port_dismiss(); audio_port_play(SND_ARRIVAL, AUDIO_PITCH_ONE);
                            ESP_LOGI(TAG, "a new fry, %s: birth flow up (announce, name, family; director `setup off` drops it)", tank.fish[nb].name); }
         }
+        int64_t pf_wait = esp_timer_get_time(); tick_us += pf_wait - pf_tick;
+        int64_t pf_tail = pf_wait;
         if (fb[cur]) {
             if (s_prefetch_pending) {                       /* prior frame's scene prefetch */
                 xSemaphoreTake(s_amc_done, portMAX_DELAY);
@@ -529,6 +723,7 @@ static void tank_task(void *arg) {
                 render_fb_primed(s_prefetch_fb, s_prefetch_ep);
             }
             int64_t t0 = esp_timer_get_time();
+            wait_us += t0 - pf_wait;
             render_tank(&tank, fb[cur], TANK_W);
             touch_port_poll(&tank);          /* the CST816 is polled, not interrupt-
                                                 driven: extra samples inside the frame
@@ -546,6 +741,9 @@ static void tank_task(void *arg) {
 #endif
                 render_settings(&tank, fb[cur], TANK_W, brightness_level(), audio_port_volume());
                 sel = -1;
+            } else if (touch_port_updates()) {   /* the updates page (2026-09-30): version, network, CHECK FOR UPDATES */
+                render_updates_page(fb[cur], TANK_W);
+                sel = -1;
             } else if (touch_port_shop()) {      /* the shop: sand dollars and what they buy */
                 render_shop(&tank, fb[cur], TANK_W);
                 sel = -1;
@@ -553,7 +751,7 @@ static void tank_task(void *arg) {
             if (sel >= 0) render_stats_card(&tank, sel, fb[cur], TANK_W);   /* tapped fish: stats card (+ the pill) */
             {   /* the battery pill: with a card, while low, and a few seconds after the cable goes in;
                    the battery page (a tap on the pill) over the live tank in its place */
-                bool pages = touch_port_milestones() || touch_port_settings() || touch_port_shop() || setup_active() || touch_port_confirm_up();
+                bool pages = touch_port_milestones() || touch_port_settings() || touch_port_updates() || touch_port_shop() || setup_active() || touch_port_confirm_up();
                 bool bpage = touch_port_battery() && s_bat_ok && !pages;
                 bool pill = s_bat_ok && !pages && !bpage && (sel >= 0 || s_bat_low || now < s_bat_popup_us);
                 if (bpage) {
@@ -561,9 +759,10 @@ static void tank_task(void *arg) {
                     battery_info(&s_bh, clock_port_now_unix(), (int)(s_bat_frac * 100 + 0.5f), s_bat_mv, s_bat_state, &bi);
                     render_battery_info(fb[cur], TANK_W, &bi, tank.clock);
                 } else if (pill) render_battery(fb[cur], TANK_W, s_bat_frac, s_bat_state, tank.clock);
+                if (!pages && !bpage) render_tool_chip(&tank, sel, fb[cur], TANK_W);   /* a tool in hand: the chip (2026-10-01) */
                 touch_port_set_pill(pill);
             }
-            if (!touch_port_milestones() && !touch_port_settings() && !touch_port_shop()) {   /* an announcement over the live tank */
+            if (!touch_port_milestones() && !touch_port_settings() && !touch_port_updates() && !touch_port_shop()) {   /* an announcement over the live tank */
                 const notice_t *nt = notice_current();
                 if (nt) render_notice(&tank, fb[cur], TANK_W, nt->kind, nt->fish, nt->bit, 1.0f - nt->age / NOTICE_UP_S);
             }
@@ -573,15 +772,20 @@ static void tank_task(void *arg) {
                 render_confirm_reset(fb[cur], TANK_W, touch_port_confirm_frac());
             int64_t t1 = esp_timer_get_time();
             if (sel >= 0) { card_us += t1 - tc; card_frames++; }
+            /* the next frame's scene prefetch starts BEFORE this frame's flush (2026-10-03): the copy
+               into the idle framebuffer takes ~14 ms, and started after the flush it had only the
+               tick and a 1 ms sleep to hide behind - the next frame waited ~9 ms for it. The flush
+               only reads this frame's buffer; the copy rides alongside it. */
+            { uint16_t *next = fb[cur ^ 1];
+              const uint16_t *scene = render_scene_buf(&s_prefetch_ep);
+              if (s_amc && scene && next && next != fb[cur] &&
+                  esp_async_memcpy(s_amc, next, (void *)scene, PLAN_FB_ALLOC, amc_cb, NULL) == ESP_OK) {
+                  s_prefetch_fb = next; s_prefetch_pending = true;
+              } }
             display_port_flush(fb[cur]);
             touch_port_poll(&tank);
-            render_us += t1 - t0; flush_us += esp_timer_get_time() - t1; frames++;
-            uint16_t *next = fb[cur ^ 1];
-            const uint16_t *scene = render_scene_buf(&s_prefetch_ep);
-            if (s_amc && scene && next && next != fb[cur] &&
-                esp_async_memcpy(s_amc, next, (void *)scene, PLAN_FB_BYTES, amc_cb, NULL) == ESP_OK) {
-                s_prefetch_fb = next; s_prefetch_pending = true;
-            }
+            pf_tail = esp_timer_get_time();
+            render_us += t1 - t0; flush_us += pf_tail - t1; frames++;
         }
         cur ^= 1;
         if (now - last_log > 10 * 1000000) {
@@ -601,10 +805,16 @@ static void tank_task(void *arg) {
                          render_prof_us[6] / 1e3f / frames,
                          card_frames ? card_us / 1e3f / card_frames : 0.0f, (unsigned long)card_frames,
                          tank.veg_growth[0], tank.veg_growth[1], tank.veg_growth[2]);
+                int64_t fw, fs; display_port_flush_prof(&fw, &fs);
+                ESP_LOGI("display", "frame %.1f ms = polls %.1f + tick %.1f + prefetch wait %.1f + render %.1f + flush %.1f + tail %.1f + sleep %.1f | flush: fill %.1f, wire wait %.1f, send calls %.1f",
+                         (float)(now - last_log) / 1e3f / frames, polls_us / 1e3f / frames, tick_us / 1e3f / frames, wait_us / 1e3f / frames,
+                         render_us / 1e3f / frames, flush_us / 1e3f / frames, tail_us / 1e3f / frames, sleep_us / 1e3f / frames,
+                         (flush_us - fw - fs) / 1e3f / frames, fw / 1e3f / frames, fs / 1e3f / frames);
                 card_us = 0; card_frames = 0;
                 memset(render_prof_us, 0, sizeof render_prof_us);
             }
             render_us = flush_us = 0; frames = 0;
+            polls_us = tick_us = wait_us = tail_us = sleep_us = 0;
             uint32_t d, ms; float tps; advisor_llm_esp_stats(&d, &ms, &tps);
             char goals[N_FISH_MAX * 16] = ""; size_t gl = 0;
             for (int i = 0; i < tank.n_fish && gl + 16 < sizeof goals; i++)
@@ -617,8 +827,13 @@ static void tank_task(void *arg) {
                      battery_pct(), battery_port_vbat_mv(), display_port_brightness());
             last_log = now;
         }
-        int spent_ms = (int)((esp_timer_get_time() - now) / 1000);
-        int rest = 16 - spent_ms;                /* pace toward 60 fps, always yield >= 1 tick */
+        /* the frame's ceiling (2026-10-04): FRAME_MIN_MS a frame, 25 fps. Frames and decisions share one
+           budget - measured on the 1.8, the same code at 16.6 fps decides in 3.69 s and at 22.8 fps in
+           3.93 s (~40 ms a decision per frame a second; the bigger glasses pay more). Strato: decisions
+           past 4 s are too slow, so a light tank no longer spends the model's time on frames past 25.
+           Always yield >= 1 tick. */
+        int rest = (int)((FRAME_MIN_MS * 1000 - (esp_timer_get_time() - now)) / 1000);
+        slept_from = esp_timer_get_time(); tail_us += slept_from - pf_tail;
         vTaskDelay(pdMS_TO_TICKS(rest < 1 ? 1 : rest));
     }
 }
@@ -661,14 +876,38 @@ static void nvs_start(void) {
     nvs_flash_init();
 }
 
+/* CHECK FOR UPDATES (the updates page, or the director's `ota check`): the
+ * tank is saved as it is before sleep, then the board restarts into update
+ * mode (update_mode.c) - the radio never runs beside the tank */
+static void request_update(void) {
+    touch_port_confirm_answer(-1);
+    progression_save(&tank);
+    bat_hist_save();
+    batlog_add(battery_pct(), battery_port_vbat_mv(), display_port_brightness(), false, "update");
+    audio_port_sleep();
+    update_mode_request();                   /* restarts */
+}
+void device_update_check(void) { request_update(); }
+/* the installer page asked a RUNNING tank for the networks (its Connect to /
+ * Change Wi-Fi): saved the same way, then the restart into provisioning mode */
+void device_provision_request(void) {
+    touch_port_confirm_answer(-1);
+    progression_save(&tank);
+    bat_hist_save();
+    batlog_add(battery_pct(), battery_port_vbat_mv(), display_port_brightness(), false, "wifi");
+    audio_port_sleep();
+    provision_mode_request();                /* restarts */
+}
+
 void app_main(void) {
-    ESP_LOGI(TAG, "pocket-tank v%s %s (build %s) boot%s", PT_RELEASE, PT_RELEASE_STAGE, version_port_string(),
-             esp_sleep_get_wakeup_cause() == ESP_SLEEP_WAKEUP_EXT0 ? " (woken by button)" : "");
+    ESP_LOGI(TAG, "pocket-tank v%s %s (build %s) for %s boot%s", PT_RELEASE, PT_RELEASE_STAGE, version_port_string(), PT_BOARD,
+             esp_sleep_get_wakeup_cause() == ESP_SLEEP_WAKEUP_EXT0 || esp_sleep_get_wakeup_cause() == ESP_SLEEP_WAKEUP_EXT1 ? " (woken by button)" : "");
     gpio_config_t btn = { .pin_bit_mask = 1ULL << BTN_SLEEP, .mode = GPIO_MODE_INPUT,
                           .pull_up_en = GPIO_PULLUP_ENABLE };
     gpio_config(&btn);
     gpio_deep_sleep_hold_dis();              /* a deep-sleep wake is a boot: the night's pad holds end here */
     nvs_start();
+    director_early();                        /* the installer page's handshake, answered from here on (director.c) */
     { int carried = batlog_init();       /* the battery log survives every reset but a power-on */
       if (carried) ESP_LOGI(TAG, "batlog: %d samples carried through the reset (director `batlog` reads them)", carried); }
     brightness_init();
@@ -676,12 +915,52 @@ void app_main(void) {
     bat_hist_load();
     assert_plan();
     for (int i = 0; i < PLAN_FB_COUNT; i++) {
-        fb[i] = heap_caps_aligned_alloc(64, PLAN_FB_BYTES, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        fb[i] = heap_caps_aligned_alloc(64, PLAN_FB_ALLOC, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
         if (!fb[i]) fb[i] = i ? fb[0] : NULL;          /* no PSRAM: share or skip */
     }
     if (!fb[0]) ESP_LOGW(TAG, "no framebuffer RAM: rendering disabled (tank still runs)");
+    /* the board first: the display (it owns the I2C bus), the glass, the
+       PMIC - then, if this boot was asked for, UPDATE MODE before anything
+       else exists (docs/OTA.md): the pages over the radio with the whole
+       internal heap to itself. Back from it, the normal boot goes on. */
+    render_clock_us = esp_timer_get_time;    /* per-stage frame profiling in the display log */
+    display_port_init();
+    if (pwr_sensed()) {                      /* the PWR key's sense line: a plain input (a deep-sleep wake left it an RTC pad) */
+        rtc_gpio_deinit(PWR_SENSE);
+        gpio_config_t sense = { .pin_bit_mask = 1ULL << PWR_SENSE, .mode = GPIO_MODE_INPUT };
+        gpio_config(&sense);
+    }
+    touch_port_init();
+    s_pmic = battery_port_init(board_i2c_bus());
+    if (!board_has_expander()) {      /* not positively the 1.8: on the round board A3V3 feeds the ES7210 whole,
+                                         and off, it clamps the I2C bus (battery_port.h) - never cut it on a guess */
+        battery_port_pin_rail("aldo1");
+        codec_port_mic_adc_down(board_i2c_bus());
+    }
+    if (board_is_watch()) battery_port_pin_rail("aldo2");   /* the watch's panel power enable is pulled up to ALDO2 */
+    battery_port_trim_rails();        /* the schematic's unused outputs off (docs/HANDOFF.md, the battery pass) */
+    battery_port_key_init();          /* the PWR key: sleep / power-off IRQs on, the power-on press cleared */
+    if (update_mode_pending()) { brightness_apply(false); update_mode_run(fb[0]); }
+    else if (provision_mode_wanted()) provision_mode_run(fb[0]);   /* just installed, no network yet: the page's Wi-Fi step, the glass dark */
+    s_rtc = rtc_port_init(board_i2c_bus());   /* wall clock for the ravenous rule (before the clockless night's sync) */
+    net_clock_boot(fb[0]);            /* no RTC chip and a saved network: the time from the internet, before the advisor takes the heap */
+    /* the advisor's hot buffers (~70 KB of internal SRAM, advisor_llm_esp.c)
+       come before the discretionary caches below: the LLM is not optional */
+    /* model: mmap the raw partition; weights are read through the flash cache */
+    const esp_partition_t *mp = esp_partition_find_first(ESP_PARTITION_TYPE_DATA, 0x40, "model");
+    if (!mp) { ESP_LOGE(TAG, "no model partition"); }
+    else {
+        const void *map; esp_partition_mmap_handle_t h;
+        if (esp_partition_mmap(mp, 0, mp->size, ESP_PARTITION_MMAP_DATA, &map, &h) == ESP_OK) {
+            model_trailer_check(mp, map);    /* the trailer stands, or is healed for the shipped model (docs/OTA.md) */
+            llm_ok = advisor_llm_esp_init(map, mp->size, tokenizer_bin_start,
+                                          tokenizer_bin_end - tokenizer_bin_start);
+            ESP_LOGI(TAG, "model partition %u KB mmap'd, advisor %s", (unsigned)mp->size / 1024, llm_ok ? "LLM" : "rules (model missing)");
+        } else ESP_LOGE(TAG, "model mmap failed");
+    }
+    ESP_LOGI(TAG, "after the advisor: internal heap %u KB free", (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL) / 1024);
     /* static-scene cache: gradient/pebbles/reef drawn once per lighting state */
-    uint16_t *scene = heap_caps_aligned_alloc(64, PLAN_FB_BYTES, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    uint16_t *scene = heap_caps_aligned_alloc(64, PLAN_FB_ALLOC, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     if (scene) render_set_scene_cache(scene); else ESP_LOGW(TAG, "no scene cache RAM: full redraw per frame");
     uint8_t *vig = heap_caps_malloc(TANK_W * TANK_H, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     if (vig) render_set_vignette_cache(vig);
@@ -696,27 +975,18 @@ void app_main(void) {
     /* stats card cache: redrawn 4x/s, blitted otherwise. Internal SRAM if it
        fits (a PSRAM->PSRAM copy of the 56 KB sprite cost 3.3 ms per frame,
        more than the draw it replaced) */
-    uint16_t *card = heap_caps_malloc(RENDER_CARD_W * RENDER_CARD_H * 2, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    /* 2026-09-30: the Wi-Fi stack's statics (docs/OTA.md) took ~36 KB of internal
+       RAM, and the card cache is the one big discretionary block: it stays
+       internal only while that leaves INTERNAL_MARGIN for the tank task's stack
+       and the runtime (NVS writes, the audio path); otherwise PSRAM, ~2 ms more
+       per frame only while a card is up */
+    #define INTERNAL_MARGIN (12288 + 40 * 1024)
+    uint16_t *card = NULL;
+    if (heap_caps_get_free_size(MALLOC_CAP_INTERNAL) >= RENDER_CARD_W * RENDER_CARD_H * 2 + INTERNAL_MARGIN)
+        card = heap_caps_malloc(RENDER_CARD_W * RENDER_CARD_H * 2, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
     if (!card) card = heap_caps_malloc(RENDER_CARD_W * RENDER_CARD_H * 2, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     if (card) render_set_card_cache(card);
     ESP_LOGI(TAG, "card cache %s", !card ? "none" : esp_ptr_external_ram(card) ? "PSRAM" : "internal SRAM");
-    /* model: mmap the raw partition; weights are read through the flash cache */
-    const esp_partition_t *mp = esp_partition_find_first(ESP_PARTITION_TYPE_DATA, 0x40, "model");
-    if (!mp) { ESP_LOGE(TAG, "no model partition"); }
-    else {
-        const void *map; esp_partition_mmap_handle_t h;
-        if (esp_partition_mmap(mp, 0, mp->size, ESP_PARTITION_MMAP_DATA, &map, &h) == ESP_OK) {
-            llm_ok = advisor_llm_esp_init(map, mp->size, tokenizer_bin_start,
-                                          tokenizer_bin_end - tokenizer_bin_start);
-            ESP_LOGI(TAG, "model partition %u KB mmap'd, advisor %s", (unsigned)mp->size / 1024, llm_ok ? "LLM" : "rules (model missing)");
-        } else ESP_LOGE(TAG, "model mmap failed");
-    }
-    render_clock_us = esp_timer_get_time;    /* per-stage frame profiling in the display log */
-    display_port_init();
-    touch_port_init();
-    s_pmic = battery_port_init(board_i2c_bus());
-    battery_port_trim_rails();        /* the schematic's unused outputs off (docs/HANDOFF.md, the battery pass) */
-    battery_port_key_init();          /* the PWR key: sleep / power-off IRQs on, the power-on press cleared */
     codec_port_init(board_i2c_bus());  /* the ES8311 fully down until a cue needs it (its digital side shares VCC3V3) */
     audio_port_init(board_i2c_bus());  /* the sound bank + player task (docs/AUDIO.md); silent without the codec */
     tank_events_set(on_tank_event, NULL);
@@ -733,28 +1003,41 @@ void app_main(void) {
             s_amc = NULL; ESP_LOGW(TAG, "async memcpy unavailable: CPU scene restore");
         }
     }
-    rtc_port_init(board_i2c_bus());   /* wall clock for the ravenous rule */
     tank_init(&tank, (uint32_t)esp_timer_get_time() ^ 0xC0FFEEu);
     esp_sleep_wakeup_cause_t cause = esp_sleep_get_wakeup_cause();
-    bool from_sleep = cause == ESP_SLEEP_WAKEUP_EXT0 || cause == ESP_SLEEP_WAKEUP_TIMER;
+    bool from_sleep = cause == ESP_SLEEP_WAKEUP_EXT0 || cause == ESP_SLEEP_WAKEUP_EXT1 || cause == ESP_SLEEP_WAKEUP_TIMER;
     if (from_sleep) {                        /* the night, lived through in one step */
         float h = progression_wake(&tank, clock_port_now_unix());
+        s_boot_lived_h = h;
         ESP_LOGI(TAG, "wake from deep sleep (%s): %s%.1f h simulated | hunger[0] %.1f | battery %d%% %d mV",
-                 cause == ESP_SLEEP_WAKEUP_TIMER ? "timer" : "BOOT", h < 0 ? "no clock, " : "", h < 0 ? 0.0f : h,
+                 cause == ESP_SLEEP_WAKEUP_TIMER ? "timer" : cause == ESP_SLEEP_WAKEUP_EXT1 ? "the PWR key" : "BOOT", h < 0 ? "no clock, " : "", h < 0 ? 0.0f : h,
                  tank.n_fish ? tank.fish[0].hunger : 0.0f, battery_pct(), battery_port_vbat_mv());
         batlog_add(battery_pct(), battery_port_vbat_mv(), 0, true, "wake");
+        net_clock_rebase();
         int put_back = restore_fish();       /* where they fell asleep, on the goal they had */
         ESP_LOGI(TAG, "wake: %d of %d fish put back where they were", put_back, tank.n_fish);
     } else {                                 /* a cold boot - power-on, a flash, a PMIC power-off, a cell that died: the absence is lived through just the same (2026-09-16) */
         float h = progression_boot(&tank);
+        s_boot_lived_h = h;
         ESP_LOGI(TAG, "cold boot: %s%.1f h lived through since the save | hunger[0] %.1f | battery %d%% %d mV",
                  h < 0 ? "no save or no clock, " : "", h < 0 ? 0.0f : h,
                  tank.n_fish ? tank.fish[0].hunger : 0.0f, battery_pct(), battery_port_vbat_mv());
+        net_clock_rebase();
+        if (!s_rtc && clock_port_now_unix() == 0) rtc_port_seed(progression_loaded_unix());   /* a clockless board after a power cut: time resumes at the save */
     }
     notice_sync(&tank);                      /* what is already earned stays unannounced */
     { uint32_t r = progression_loaded_release();   /* which release wrote the tank we just loaded */
       if (r) ESP_LOGI(TAG, "the save was written by v%d.%d.%d", (int)(r >> 16), (int)(r >> 8 & 255), (int)(r & 255));
-      else ESP_LOGI(TAG, "the save predates release numbers (or there was none)"); }
+      else ESP_LOGI(TAG, "the save predates release numbers (or there was none)");
+      if (r && r < (uint32_t)PT_RELEASE_NUM) notice_updated();   /* the first boot of a new release: its card, once (the next save stamps this release) */ }
+    /* the save loaded under this image: it is good - the bootloader's
+       rollback (a fresh image boots "pending" once) stands down. Before the
+       first save write, so an older build never meets a newer save it
+       cannot read (it reads its prefix anyway: persist_port_esp.c) */
+    { esp_ota_img_states_t st; const esp_partition_t *run = esp_ota_get_running_partition();
+      if (run && esp_ota_get_state_partition(run, &st) == ESP_OK && st == ESP_OTA_IMG_PENDING_VERIFY) {
+          esp_ota_mark_app_valid_cancel_rollback();
+          ESP_LOGI(TAG, "first boot of this image from %s: marked valid, rollback cancelled", run->label); } }
     ESP_LOGI(TAG, "population %d (cap %d): %s + %s ...", tank.n_fish, POP_CAP,
              tank.fish[0].name, tank.n_fish > 1 ? tank.fish[1].name : "-");
     if (progression_setup_pending()) {           /* a new tank (fresh install, or a reset mid-flow): the welcome */
@@ -776,5 +1059,12 @@ void app_main(void) {
             heap_caps_free(tmp);
         }
     }
-    xTaskCreatePinnedToCore(tank_task, "tank", 12288, NULL, 4, NULL, 0);
+    /* the tank task starts from a one-shot timer, AFTER app_main has returned
+       and its own 16 KB stack is back in the internal heap (2026-09-30: with
+       the Wi-Fi stack linked, creating it from here found 11 KB free and the
+       tank never started) */
+    ESP_LOGI(TAG, "app_main done: internal heap %u KB free (largest block %u KB); the tank task starts once this stack is freed",
+             (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL) / 1024, (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL) / 1024);
+    const esp_timer_create_args_t st = { .callback = start_tank_task, .name = "tank-start" };
+    esp_timer_handle_t th; esp_timer_create(&st, &th); esp_timer_start_once(th, 200000);
 }

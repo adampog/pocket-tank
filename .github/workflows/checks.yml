@@ -19,7 +19,11 @@ jobs:
           sudo apt-get install -y libsdl2-dev
           git clone --depth 1 --branch v9.2.2 https://github.com/lvgl/lvgl.git sim/lvgl
       - name: Build and test the simulator
-        run: make -C sim -j"$(nproc)" check
+        run: |
+          # all three boards' worlds (docs/BOARDS.md): the rectangle, the bowl, the watch.
+          # the dev repo does not track model/out; the public one does (the LLM selftest needs it)
+          if [ -f model/out/model_q4.bin ]; then make -C sim -j"$(nproc)" check-all
+          else echo "no model in this checkout: the LLM selftest is skipped"; make -C sim -j"$(nproc)" NOMODEL=1 check-all; fi
       - name: Test the audio mixer
         working-directory: firmware/host_test
         run: |
@@ -27,6 +31,7 @@ jobs:
             -o audio_host audio_host.c ../../common/audio.c ../../common/sounds.c
           ./audio_host
       - name: Compare batched and sequential inference
+        if: hashFiles('model/out/model_q4.bin') != ''
         working-directory: firmware/host_test
         run: |
           cc -O2 -std=c11 -Wall -Wextra -Werror -I../../common/llm \

@@ -78,11 +78,18 @@ static bool qmi_read_accel(int16_t a[3]) {
 /* sensors off, chip quiesced while the neighbouring rails cycle */
 static void qmi_sleep(void) { (void)wr8(REG_CTRL7, 0x00); }
 
+/* the datasheet's Power-Down (deep sleep only): CTRL1 sensorDisable (bit 0)
+ * stops the 2 MHz clock too (~50 -> ~20 uA). The wake is a reboot, and
+ * qmi_reset_config's soft reset (REG_RESET 0xB0) + CTRL1 0x40 brings the
+ * clock back and clears it. (0x41 = 0x40 address-auto-increment + bit0.) */
+static void qmi_power_down(void) { (void)wr8(REG_CTRL1, 0x41); }
+
 static const struct imu_chip s_chip = {
     .name = "QMI8658",
     .reset_config = qmi_reset_config,
     .read_accel = qmi_read_accel,
     .sleep = qmi_sleep,
+    .power_down = qmi_power_down,
     .up_axis = UP_AXIS,
     .up_sign = UP_SIGN,
     .out_axis = OUT_AXIS,

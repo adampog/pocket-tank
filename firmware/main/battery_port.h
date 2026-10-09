@@ -35,5 +35,13 @@ int  battery_port_vbat_mv(void);
  * per-rail switch for experiments (refuses dcdc1 and anything unknown). */
 bool battery_port_set_rail(const char *name, bool on);
 void battery_port_trim_rails(void);
+/* the round 1.75C (2026-10-01): its ES7210 microphone ADC has EVERY supply on
+ * A3V3 - the digital and I/O pins too - and with ALDO1 off the dead chip
+ * clamps the I2C bus it shares with the PMIC, the touch and the IMU (found at
+ * the first boot: the trim took the bus down with the rail). A pinned rail
+ * is switched on and stays on: set_rail(name, false) leaves it and says ok.
+ * The watch (2.06) pins two: ALDO1 for the same ES7210, and ALDO2 - its
+ * panel's power enable is pulled up to that rail (board_pins.h). */
+void battery_port_pin_rail(const char *name);
 
 #endif

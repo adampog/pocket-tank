@@ -11,8 +11,8 @@ and print what the tank says back. The firmware's director console
 
 A plain open leaves the tank running; forcing DTR/RTS low on open RESETS
 the chip (USB-Serial-JTAG auto-reset), so don't. Port: first /dev/cu.usbmodem*,
-or -p PATH. -t SECONDS how long to listen for the reply (default 2)."""
-import sys, glob, time, argparse
+or -p PATH / TANK_PORT (required when several boards are plugged in). -t SECONDS how long to listen for the reply (default 2)."""
+import os, sys, glob, time, argparse
 import serial
 
 ap = argparse.ArgumentParser()
@@ -21,9 +21,11 @@ ap.add_argument("-t", "--time", type=float, default=2.0)
 ap.add_argument("--watch", action="store_true")
 ap.add_argument("cmd", nargs="*")
 a = ap.parse_args()
-port = a.port or next(iter(sorted(glob.glob("/dev/cu.usbmodem*"))), None)
+ports = sorted(glob.glob("/dev/cu.usbmodem*"))
+port = a.port or os.environ.get("TANK_PORT") or (ports[0] if len(ports) == 1 else None)
 if not port:
-    sys.exit("no /dev/cu.usbmodem* - is the tank awake (press BOOT) and on a data USB port?")
+    sys.exit("no /dev/cu.usbmodem* - is the tank awake (press BOOT) and on a data USB port?" if not ports else
+             "more than one board on USB (" + ", ".join(ports) + ") - say which is the tank: -p PATH or TANK_PORT=PATH")
 s = serial.Serial()
 s.port, s.baudrate, s.timeout = port, 115200, 0.1
 s.open()

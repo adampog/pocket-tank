@@ -4,6 +4,7 @@
 #include <stdint.h>
 #include "tank.h"
 bool touch_port_init(void);
+bool touch_port_deep_sleep(void);   /* the night's deep sleep: the chip's own sleep, its reset left high (true = it took it); the wake is a reboot */
 void touch_port_poll(tank_t *t);
 int  touch_port_selected(void);   /* tapped fish for the stats card, RENDER_CARD_SNAIL for the snail's, -1 = none */
 /* milestones page: a tap ON the open stats card (its MORE button, or any of
@@ -44,6 +45,22 @@ int  touch_port_take_shop(void);
 void touch_port_set_pill(bool up);
 bool touch_port_battery(void);
 void touch_port_show_battery(bool on);
+/* the UPDATES page (2026-09-30, docs/OTA.md): from the settings page's
+ * UPDATES button; its CHECK is handed to main once (UPD_TAP_CHECK), which
+ * saves and restarts into update mode; CLOSE returns to the settings page */
+bool touch_port_updates(void);
+void touch_port_show_updates(bool on);
+int  touch_port_take_update(void);              /* UPD_TAP_CHECK once, else 0 */
+/* update mode's raw read (no tank, no pages): the finger in tank space, true while down */
+bool touch_port_read_raw(float *x, float *y);
 void touch_port_set_bias(int px);              /* finger-landing correction: reported y moves up by px */
 int  touch_port_bias(void);
+void touch_port_set_log(bool on);              /* one log line per press, at its release (director `touch log on|off`) */
+/* the round board's lift rule (2026-10-03): silence of ms inside a press is a
+ * lift (0 = keep), and said 1/0 = a "no finger" report lifts at once or not
+ * (-1 = keep); director `touch lift <ms>` / `touch said on|off`, not saved */
+void touch_port_set_lift(int ms, int said);
+int  touch_port_lift_ms(void);
+bool touch_port_lift_said(void);
+void touch_port_raw_seen(int *x0, int *x1, int *y0, int *y1);   /* the raw report's extremes since boot, in tank space (x1 < x0: no touch yet) */
 #endif

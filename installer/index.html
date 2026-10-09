@@ -6,13 +6,13 @@
 <meta name="theme-color" content="#f8f8f8">
 <title>Install Pocket Tank</title>
 <meta name="description" content="Install Pocket Tank on a Waveshare ESP32-S3-Touch-AMOLED-1.8 from your browser. Nothing to download.">
-<link rel="canonical" href="https://stratobuilds.com/pocket-tank-installer/">
+<link rel="canonical" href="https://pocketank.com/install/">
 <link rel="icon" href="https://stratobuilds.com/wp-content/uploads/2025/06/strato-builds-favicon-64.png" sizes="64x64">
 <link rel="apple-touch-icon" href="https://stratobuilds.com/wp-content/uploads/2025/06/strato-builds-favicon-64.png">
 <!-- social sharing: the featured image (1280x720) and the card text -->
 <meta property="og:type" content="website">
 <meta property="og:site_name" content="StratoBuilds">
-<meta property="og:url" content="https://stratobuilds.com/pocket-tank-installer/">
+<meta property="og:url" content="https://pocketank.com/install/">
 <meta property="og:title" content="Install Pocket Tank from your browser">
 <meta property="og:description" content="A tiny AI runs a fish tank on an ESP32-S3 board. Plug it in, click Install, done. Nothing to download.">
 <meta property="og:image" content="https://stratobuilds.com/wp-content/uploads/2026/09/pt-installer.jpg">
@@ -85,6 +85,15 @@
     border-radius: 10px; padding: 14px 16px; max-width: 420px;
   }
   .meta { color: var(--muted); font-size: 14px; }
+  /* the board picker (2026-10-02): shown only when the build carries more than one board */
+  .boards { display: flex; flex-wrap: wrap; gap: 10px; margin: 4px 0 18px; }
+  .boards button { font: 500 16px/1.25 var(--sans); letter-spacing: .01em; color: var(--ink); text-align: left;
+                   background: var(--card); border: 1.5px solid var(--rule); border-radius: 10px; padding: 14px 16px;
+                   cursor: pointer; min-width: 180px; flex: 1 1 180px; }
+  .boards button small { display: block; margin-top: 4px; font: 500 10px/1.4 var(--mono); letter-spacing: .04em;
+                         text-transform: uppercase; color: var(--muted); }
+  .boards button[aria-checked="true"] { border-color: var(--ink); box-shadow: inset 0 0 0 1.5px var(--ink); }
+  .boards button[aria-checked="true"]::before { content: "\2713  "; }
   .fine { color: var(--muted); font-size: 15px; }
   details { border-top: 1.5px solid var(--rule); padding: 12px 0; }
   details:last-of-type { padding-bottom: 0; }
@@ -119,10 +128,15 @@
 
   <section class="card">
     <h2>Install</h2>
+    <div data-pick hidden>
+      <p><b>Pick your board.</b></p>
+      <div class="boards" role="radiogroup" aria-label="Your board"></div>
+    </div>
     <ol>
       <li><b>Plug the board into your computer.</b> Use a USB-C cable that carries data. Some cables only charge.</li>
       <li><b>Click Install.</b> Pick <code>USB JTAG/serial debug unit</code> from the list. On Linux it may say <code>ttyACM0</code>.</li>
-      <li><b>Wait a minute or two.</b> When it says <em>Installation complete</em>, the board restarts by itself.
+      <li><b>Wait a minute or two.</b> When it says <em>Installation complete</em>, click <em>Next</em>.</li>
+      <li><b>Connect it to Wi-Fi.</b> Pick your network and type its password. The tank's screen stays dark until you finish. Now your tank can update itself, with no cable. You can also skip this and set it up later on the tank.
         <ul>
           <li><b>New board:</b> you get a fresh tank with two baby fish.</li>
           <li><b>Already have a tank:</b> it comes back just as you left it.</li>
@@ -158,7 +172,9 @@
   <section class="card">
     <h2>Which board?</h2>
     <p><span class="pill">Supported</span></p>
-    <p><b>Waveshare ESP32-S3-Touch-AMOLED-1.8</b>, version V1 or V2. About $35 with the screen and a battery.</p>
+    <div data-supported>
+      <p><b>Waveshare ESP32-S3-Touch-AMOLED-1.8</b>, version V1 or V2. About $35 with the screen and a battery.</p>
+    </div>
     <p class="fine">Other boards won't work yet. The installer may still run on them, but the screen will stay blank.</p>
   </section>
 
@@ -214,17 +230,47 @@
   </footer>
 </main>
 <script>
+  /* The boards this installer carries (make_installer.py fills it in: one
+     manifest per board). With more than one, a picker comes first and points
+     both buttons at the chosen board's manifests; the choice is remembered. */
+  const BOARDS = {{BOARDS}};
+  const LABEL = { amoled18: '1.8 inch', round175c: '1.75 inch round', watch206: '2.06 inch watch' };
+  const NOTE = { amoled18: 'version V1 or V2. About $35 with the screen and a battery', round175c: 'the pendant: a round tank that fills the whole circle', watch206: 'the watch: a tall tank you can wear' };
+  const installBtn = document.querySelector('esp-web-install-button:not(.fresh)');
+  const freshBtn = document.querySelector('esp-web-install-button.fresh');
   /* The page may live on a different host than the firmware it installs (the
      site's copy points at the GitHub Pages manifest): show the version and
      build date of what the button will actually flash. */
-  (async () => {
+  async function stamp() {
     try {
-      const url = document.querySelector('esp-web-install-button').getAttribute('manifest');
-      const m = await fetch(url, { cache: 'no-store' }).then(r => r.json());
+      const m = await fetch(installBtn.getAttribute('manifest'), { cache: 'no-store' }).then(r => r.json());
       if (m.version) document.querySelectorAll('[data-version]').forEach(e => e.textContent = m.version);
       if (m.built) document.querySelectorAll('[data-built]').forEach(e => e.textContent = m.built);
     } catch (e) { /* offline or blocked: the stamped values stay */ }
-  })();
+  }
+  function choose(id) {
+    const b = BOARDS.find(x => x.id === id) || BOARDS[0];
+    installBtn.setAttribute('manifest', b.manifest);
+    freshBtn.setAttribute('manifest', b.erase);
+    document.querySelectorAll('.boards button').forEach(e => e.setAttribute('aria-checked', e.dataset.id === b.id));
+    try { localStorage.setItem('pt-board', b.id); } catch (e) { /* private window: not remembered */ }
+    stamp();
+  }
+  if (BOARDS.length > 1) {
+    const list = document.querySelector('.boards');
+    for (const b of BOARDS) {
+      const e = document.createElement('button');
+      e.type = 'button'; e.setAttribute('role', 'radio'); e.dataset.id = b.id;
+      e.innerHTML = `${LABEL[b.id] || b.name}<small>${b.name.replace(/^Waveshare /, '')}</small>`;
+      e.addEventListener('click', () => choose(b.id));
+      list.appendChild(e);
+    }
+    document.querySelector('[data-pick]').hidden = false;
+    document.querySelector('[data-supported]').innerHTML = BOARDS.map(b =>
+      `<p><b>Waveshare ${b.name.replace(/^Waveshare /, '')}</b>, ${NOTE[b.id] || ''}.</p>`).join('');
+    let saved = null; try { saved = localStorage.getItem('pt-board'); } catch (e) { }
+    choose(saved || BOARDS[0].id);
+  } else stamp();
 </script>
 </body>
 </html>

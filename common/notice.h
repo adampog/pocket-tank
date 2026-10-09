@@ -18,14 +18,20 @@
  * wait until the 'meet it' sequence is done" - the fry is born mid-frame and
  * its population badge came up the frame before the flow opened.
  * Each notice carries the cue to play when it comes up; the platform takes
- * it with notice_take_cue. */
+ * it with notice_take_cue.
+ *
+ * NOTICE_LIGHTS_OUT (2026-10-03, Strato: "in case it surprises someone the
+ * first time it happens"): the first double-tap that turns the light off
+ * (tank.h light_tip_seen, saved) says so, once, without a chime. A tap on it
+ * closes it AND reaches the tank (notice_dismiss returns false), so the
+ * double-tap it asks for works with the notice still up. */
 #ifndef NOTICE_H
 #define NOTICE_H
 #include <stdbool.h>
 #include <stdint.h>
 #include "tank.h"
 
-enum { NOTICE_MILESTONE, NOTICE_TANK_MILESTONE, NOTICE_STAGE, NOTICE_LOW_BATTERY };
+enum { NOTICE_MILESTONE, NOTICE_TANK_MILESTONE, NOTICE_STAGE, NOTICE_LOW_BATTERY, NOTICE_UPDATED, NOTICE_LIGHTS_OUT };
 typedef struct { int kind; int fish; uint32_t bit; float age; } notice_t;
 
 #define NOTICE_UP_S   6.0f
@@ -35,8 +41,9 @@ typedef struct { int kind; int fish; uint32_t bit; float age; } notice_t;
 void notice_sync(const tank_t *t);
 void notice_tick(const tank_t *t, float dt, bool blocked);
 const notice_t *notice_current(void);      /* NULL = none up */
-void notice_dismiss(void);                 /* a tap */
+bool notice_dismiss(void);                 /* a tap: true = the notice took it, false = it goes on to the tank */
 void notice_low_battery(void);             /* platform: the gauge fell to the threshold */
+void notice_updated(void);                 /* platform: the first boot of a new release (after notice_sync) */
 int  notice_take_cue(void);                /* SND_* for a notice that just came up, else -1 */
 int  notice_pending(void);                 /* queued, not counting the one up */
 

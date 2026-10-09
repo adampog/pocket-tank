@@ -45,7 +45,7 @@ static int drive9(float v) { return v < 0 ? 0 : v > 9 ? 9 : (int)v; }
 void advisor_core_encode(const tank_t *t, int idx, char *out, size_t n) {
     const fish_t *f = &t->fish[idx];
     int col = (int)(f->x / (TANK_W / 3.0f)); if (col > 2) col = 2;
-    int row = (int)(f->y / (TANK_H / 2.0f)); if (row > 1) row = 1;
+    int row = (int)(f->y / (TANK_BOT / 2.0f)); if (row > 1) row = 1;
 
     char food_s[24], shadow_s[24], friend_s[40], bubble_s[24], reef_s[24], wall_s[24], frs[24];
     float fd; int fi = tank_nearest_food(t, f, &fd);
@@ -60,11 +60,14 @@ void advisor_core_encode(const tank_t *t, int idx, char *out, size_t n) {
     else if (g_schema >= 3) snprintf(friend_s, sizeof friend_s, "%s", frs);            /* v3: no names */
     else snprintf(friend_s, sizeof friend_s, "%s %s", t->fish[fr].model_name, frs);
     sighting(f, t->bubble_x, t->bubble_y, true, bubble_s, sizeof bubble_s);
-    sighting(f, t->reef_x, t->reef_y, true, reef_s, sizeof reef_s);
+    { float rx, ry; tank_reef_spot(t, &rx, &ry);   /* the cluster once the keeper owns one, else the grass corner's spot */
+      sighting(f, rx, ry, true, reef_s, sizeof reef_s); }
 
     /* wall: nearest side, world-frame contact point, heading-relative clock */
-    float dists[4] = { TANK_W - f->x, f->x, TANK_H - f->y, f->y };     /* 3,9,6,12 o'clock sides */
-    float wxs[4] = { TANK_W, 0, f->x, f->x }, wys[4] = { f->y, f->y, TANK_H, 0 };
+    /* (the glass at the fish's own height and column: the frame's edges in the rectangle, the circle in a bowl) */
+    float gx0 = tank_glass_x0(f->y), gx1 = tank_glass_x1(f->y), gy0 = tank_glass_top(f->x);
+    float dists[4] = { gx1 - f->x, f->x - gx0, TANK_BOT - f->y, f->y - gy0 };     /* 3,9,6,12 o'clock sides */
+    float wxs[4] = { gx1, gx0, f->x, f->x }, wys[4] = { f->y, f->y, TANK_BOT, gy0 };
     int side = 0;
     for (int i = 1; i < 4; i++) if (dists[i] < dists[side]) side = i;
     const char *wb = bucket(dists[side]);

@@ -157,8 +157,16 @@ static const rail_t RAILS[] = {
     { "bldo1", 0x90, 4 }, { "bldo2", 0x90, 5 }, { "cpusldo", 0x90, 6 }, { "dldo1", 0x90, 7 },
     { "dldo2", 0x91, 0 },
 };
+static const char *s_pinned[2]; static int s_pinned_n;   /* the rails this board can never lose (battery_port.h) */
+void battery_port_pin_rail(const char *name) {
+    bool ok = battery_port_set_rail(name, true);
+    if (s_pinned_n < (int)(sizeof s_pinned / sizeof s_pinned[0])) s_pinned[s_pinned_n++] = name;
+    else { ok = false; ESP_LOGE("battery", "no room to pin rail %s", name); }
+    ESP_LOGI("battery", "rail %s pinned on%s", name, ok ? "" : " (FAILED)");
+}
 bool battery_port_set_rail(const char *name, bool on) {
     if (!s_dev) return false;
+    for (int i = 0; !on && i < s_pinned_n; i++) if (!strcasecmp(name, s_pinned[i])) return true;
     for (size_t i = 0; i < sizeof RAILS / sizeof RAILS[0]; i++) {
         if (strcasecmp(name, RAILS[i].name)) continue;
         uint8_t v;
@@ -195,6 +203,10 @@ void battery_port_dump(void) {
     for (int i = 0; i < 5 && ok; i++) ok = rd(0x82 + i, &dcv[i]);
     for (int i = 0; i < 9 && ok; i++) ok = rd(0x92 + i, &ldov[i]);
     if (!ok) { ESP_LOGW("battery", "AXP2101 read failed"); return; }
+    { uint8_t pwm = 0, adc = 0;                       /* 81: bits 2-5 force DCDC1-4 to PWM (milliamps at a light load); 30: the ADC channels */
+      if (rd(0x81, &pwm) && rd(0x30, &adc))
+          ESP_LOGI("battery", "  DCDC mode 81=%02x (DCDC1 %s, CCM %s) | ADC enables 30=%02x", pwm, (pwm >> 2) & 1 ? "FORCED PWM" : "auto PWM/PFM",
+                   (dc_en >> 6) & 1 ? "ON" : "off", adc); }
     ESP_LOGI("battery", "AXP2101 raw: st1 %02x st2 %02x cfg %02x | dcdc_en %02x v %02x %02x %02x %02x %02x | ldo_en %02x %02x v %02x %02x %02x %02x %02x %02x %02x %02x %02x | chg %02x icc %02x cv %02x",
              st1, st2, cfg, dc_en, dcv[0], dcv[1], dcv[2], dcv[3], dcv[4], ldo0, ldo1,
              ldov[0], ldov[1], ldov[2], ldov[3], ldov[4], ldov[5], ldov[6], ldov[7], ldov[8], chg_en, icc, cv);

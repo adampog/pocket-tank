@@ -1,5 +1,6 @@
 #include "touch_port.h"
 bool touch_port_init(void) { return false; }
+bool touch_port_deep_sleep(void) { return false; }
 void touch_port_poll(tank_t *t) { (void)t; }
 int  touch_port_selected(void) { return -1; }
 static bool s_ms;
@@ -27,5 +28,15 @@ void touch_port_set_pill(bool up) { (void)up; }
 bool touch_port_battery(void) { return s_bat; }
 void touch_port_show_battery(bool on) { s_bat = on; }
 void touch_port_dismiss(void) { s_ms = false; s_bat = false; }
+static bool s_upd;
+bool touch_port_updates(void) { return s_upd; }
+void touch_port_show_updates(bool on) { s_upd = on; }
+int  touch_port_take_update(void) { return 0; }
+bool touch_port_read_raw(float *x, float *y) { (void)x; (void)y; return false; }
 void touch_port_set_bias(int px) { (void)px; }
 int  touch_port_bias(void) { return 0; }
+void touch_port_set_log(bool on) { (void)on; }
+void touch_port_set_lift(int ms, int said) { (void)ms; (void)said; }
+int  touch_port_lift_ms(void) { return 0; }
+bool touch_port_lift_said(void) { return false; }
+void touch_port_raw_seen(int *x0, int *x1, int *y0, int *y1) { *x0 = *y0 = 0; *x1 = *y1 = -1; }

@@ -12,6 +12,14 @@
 # checks what the public URL serves. Old vendor-<tag> folders stay on the
 # server on purpose: a page cached somewhere must never point at a 404.
 set -euo pipefail
+# RETIRED 2026-10-04: stratobuilds.com/pocket-tank-installer/ now REDIRECTS to
+# pocketank.com/install (a 301 in that folder's .htaccess, a fallback index.html;
+# the old page is kept beside them as installer-page-2026-10-04.html). Running this
+# would put the old page and its .htaccess back over the redirect. The installer
+# page is published with tools/publish_pocketank.sh.
+if [ "${FORCE_OLD_INSTALLER_PAGE:-}" != "yes" ]; then
+  echo "publish_site_installer: retired - stratobuilds.com/pocket-tank-installer/ redirects to pocketank.com/install (tools/publish_pocketank.sh publishes the installer page)"; exit 1
+fi
 cd "$(dirname "$0")/.."
 URL=https://stratobuilds.com/pocket-tank-installer
 REMOTE=www/stratobuilds.com/public_html

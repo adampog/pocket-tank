@@ -179,6 +179,11 @@ int  imu_port_face_down_now(void) { return -1; }
 void imu_port_sleep(void) {
     if (s_chip) s_chip->sleep();
 }
+void imu_port_power_down(void) {
+    if (!s_chip) return;
+    if (s_chip->power_down) s_chip->power_down();   /* the deepest state (QMI8658: the 2 MHz clock off too) */
+    else s_chip->sleep();                           /* a chip with no deeper state: the quiesce is as low as it goes */
+}
 void imu_port_wake(void) {
     if (!s_chip) return;
     if (!s_chip->reset_config()) ESP_LOGW(TAG, "wake reconfig failed");

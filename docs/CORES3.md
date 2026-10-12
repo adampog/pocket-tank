@@ -71,8 +71,15 @@ Best-effort: with no chip present (QEMU) each write logs and continues rather th
 ILI9342C rides the shared `display_port_spi.c` ILI9341-family driver
 (`CONFIG_POCKET_TANK_DISPLAY_ILI9341`). Pins (`board_pins.h`): MOSI **37**, SCLK **36**,
 CS **3**, D/C **35** (shares GPIO35 with the unused MISO — write-only, MISO = -1),
-40 MHz, inversion **on**, 320 x 240 landscape (native portrait 240 x 320 scanned via
-MADCTL). TF card CS (GPIO4) held high off the shared bus.
+40 MHz, inversion **on**, 320 x 240. The ILI9342C is **natively 320 x 240 landscape**
+(a QVGA-landscape controller — unlike the portrait-native ILI9341; this is also why the
+CoreS3 FT6336 reports landscape raw, see *Touch*). pocket-tank drives it **provisionally**
+through the shared ILI9341-family driver with `board_pins.h` set to the portrait dims
+(`PANEL_W` 240 / `PANEL_H` 320) plus `LCD_SWAP_XY` — a reuse of the rectangular-SPI panel
+path; whether that yields the right picture on the landscape-native glass, and the exact
+MADCTL / colour order / orientation, are **flash-time** (adjust the `board_pins.h` `LCD_*`
+if the picture is rotated/mirrored/wrong-colour — see HANDOFF). TF card CS (GPIO4) held
+high off the shared bus.
 
 **Backlight** is AXP2101 DLDO1, driven from `backlight_set` via
 `battery_port_dldo1_backlight` (enable 0x90 bit7, voltage 0x99 = (level+641)>>5, exactly

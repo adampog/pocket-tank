@@ -101,18 +101,22 @@ static void apply_orientation(void) {
 
 #if CONFIG_POCKET_TANK_BOARD_CORES3
 /* CoreS3 pre-panel bring-up. The ILI9342C has no power or reset GPIO on this
- * board (PIN_LCD_RST/PIN_LCD_BL are -1): its VCI rail hangs off the AXP2101 PMIC
- * (0x34) and its reset line off the AW9523B IO-expander (0x58), both on the
- * internal I2C bus. M5GFX powers these before it ever touches the panel, so we
- * do the same here, before new_panel / esp_lcd_panel_reset below.
+ * board (PIN_LCD_RST/PIN_LCD_BL are -1): its VCI comes from the SY7088 boost and
+ * its reset line from the AW9523B IO-expander (0x58) - both driven through that
+ * expander, with the AXP2101 PMIC (0x34) supplying the board's other rails, all
+ * on the internal I2C bus. M5GFX powers these before it ever touches the panel,
+ * so we do the same here, before new_panel / esp_lcd_panel_reset below.
  *
  * The register writes mirror the vendor sequence exactly (see the slice proof
  * note): AW9523B from M5GFX 0.2.32 (M5GFX.cpp board-detect, ~L1769-1781) and the
  * AXP2101 ALDO rails from M5Unified 0.2.25 (Power_Class.inl CoreS3 case,
  * ~L409-430). AW9523B P1_7 (0x03 bit7) enables the SY7088 boost; P1_1 (0x03
  * bit1) driven high releases the LCD from reset (power-on default low = held in
- * reset). AXP2101 ALDO2 (0x93, 3.3 V) is the panel's VCI. The DLDO1 backlight is
- * slice 03, not here.
+ * reset). The panel's VCI is that SY7088 boost, NOT an AXP2101 rail: the ALDO
+ * rails below are the vendor's peripheral supplies (ALDO1 the AW88298 amp, ALDO2
+ * the ES7210 mic, ALDO3 the camera, ALDO4 the TF slot - M5Unified), set to match
+ * the vendor sequence and unused by the tank. The DLDO1 backlight is slice 03,
+ * not here.
  *
  * Best-effort, like the AMOLED expander_power_up() and the battery port: in QEMU
  * (or with no chip present) nothing ACKs, so each step logs and continues rather
@@ -158,17 +162,17 @@ static void cores3_power_up(void) {
         n += 6;
         ok += cores3_reg_bitoff(dev, 0x23, 0x1F);        /* DCDC1-5 UVP power-off disable */
         ok += cores3_reg_wr    (dev, 0x90, 0xBF);        /* LDOs on (ALDO1-4, BLDO1-2, DLDO1) */
-        ok += cores3_reg_wr    (dev, 0x92, 18 - 5);      /* ALDO1 = 1.8 V */
-        ok += cores3_reg_wr    (dev, 0x93, 33 - 5);      /* ALDO2 = 3.3 V (panel VCI) */
-        ok += cores3_reg_wr    (dev, 0x94, 33 - 5);      /* ALDO3 = 3.3 V */
-        ok += cores3_reg_wr    (dev, 0x95, 33 - 5);      /* ALDO4 = 3.3 V */
+        ok += cores3_reg_wr    (dev, 0x92, 18 - 5);      /* ALDO1 = 1.8 V (AW88298 amp) */
+        ok += cores3_reg_wr    (dev, 0x93, 33 - 5);      /* ALDO2 = 3.3 V (ES7210 mic, NOT the panel) */
+        ok += cores3_reg_wr    (dev, 0x94, 33 - 5);      /* ALDO3 = 3.3 V (camera) */
+        ok += cores3_reg_wr    (dev, 0x95, 33 - 5);      /* ALDO4 = 3.3 V (TF slot) */
         i2c_master_bus_rm_device(dev);
     } else ESP_LOGW(TAG, "CoreS3: AXP2101 (0x%02X) absent - panel rails not powered (expected in QEMU)", I2C_ADDR_AXP2101);
 
     if (ok == n) ESP_LOGI(TAG, "CoreS3 pre-panel bring-up: AW9523B + AXP2101 rails up (%d/%d writes acked)", ok, n);
     else ESP_LOGW(TAG, "CoreS3 pre-panel bring-up: %d/%d I2C writes acked (chip absent or no-ACK); continuing", ok, n);
 
-    vTaskDelay(pdMS_TO_TICKS(120));   /* let the boosted rail + ALDO2 settle and the panel leave reset before init */
+    vTaskDelay(pdMS_TO_TICKS(120));   /* let the boosted panel rail (SY7088) settle and the panel leave reset before init */
 }
 #endif /* CONFIG_POCKET_TANK_BOARD_CORES3 */
 

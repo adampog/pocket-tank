@@ -90,31 +90,44 @@ extern bool board_is_v2(void);
  * slice-02 bring-up (PIN_TP_RST=-1, no touch-reset GPIO). This is the intended
  * CoreS3 config, not a CYD accident.
  *
- * Orientation: M5GFX reads this FT6336 as LANDSCAPE 320x240 (x_max 319, y_max
- * 239) aligned to the ILI9342C with NO extra mirror (Touch_M5StackCoreS3 sets
- * offset_rotation 0; the panel is rotation 1 + offset_rotation 3, invert on).
- * The CoreS3 display flags equal the CYD's (board_pins.h: SWAP_XY on, no mirror),
- * so as a provisional default the CoreS3 touch uses the CYD's bench-found
- * transform (swap to landscape, then a 180 turn). The EXACT swap/mirror/turn for
- * this panel is a flash-time bench item (HANDOFF.md / slice 06): M5GFX does not
- * apply the CYD's 180 to the CoreS3, and the ILI9342C is landscape-native (the
- * CYD's ILI9341 is portrait-native), so if a tap lands 180-rotated clear
- * TOUCH_TURN_180, and if it is mirrored flip TOUCH_MIRROR_Y. */
-#define TOUCH_SWAP_XY  1
+ * Coordinate basis - the key difference from the CYD. The CYD's FT6336G reports
+ * PORTRAIT raw (0..239 x 0..319), so the CYD config has x_max/y_max = panel
+ * portrait dims and SWAP_XY=1 to turn it landscape. The CoreS3's FT6336 reports
+ * LANDSCAPE raw ALREADY (0..319 x 0..239) - M5GFX Touch_M5StackCoreS3 sets
+ * x_max 319 / y_max 239, offset_rotation 0, no mirror, and the mission brief
+ * ("coordinates 0..319 x 0..239 already landscape") agrees. So CoreS3 must NOT
+ * swap and must use the landscape x_max/y_max; applying the CYD's portrait
+ * transform to this raw dropped tank x 239..319 and produced negative coords.
+ *
+ * Mapping: identity. x_max = TANK_W-1 (319), y_max = TANK_H-1 (239), SWAP_XY=0,
+ * no mirror, no turn -> tx = rawx, ty = rawy. Corners all land in range:
+ * (0,0)->(0,0), (319,0)->(319,0), (0,239)->(0,239), (319,239)->(319,239) - full
+ * 0..319 x 0..239 coverage, no negative/out-of-range. This is the M5GFX-faithful
+ * default (touch offset_rotation 0, no mirror). WHICH coherent orientation is
+ * physically right-side-up is the flash-time bench item (HANDOFF.md / slice 06):
+ * if the whole screen is 180-rotated set TOUCH_TURN_180=1; if a tap is mirrored
+ * on one axis set TOUCH_MIRROR_X or TOUCH_MIRROR_Y (x_max/y_max make the mirror
+ * land correctly). The panel's own rotation 1 + offset_rotation 3 in M5GFX is a
+ * separate display-side correction, not a touch mirror. */
+#define TOUCH_SWAP_XY  0
 #define TOUCH_MIRROR_X 0
-#define TOUCH_MIRROR_Y 1
-#define TOUCH_TURN_180 1
+#define TOUCH_MIRROR_Y 0
+#define TOUCH_TURN_180 0
+#define TOUCH_X_MAX    (TANK_W - 1)    /* landscape raw max x = 319 (M5GFX x_max) */
+#define TOUCH_Y_MAX    (TANK_H - 1)    /* landscape raw max y = 239 (M5GFX y_max) */
 #else  /* CYD28 */
 /* The CYD's FT6336G (the same FT5x06 register family) on the shared bus, with
- * its reset on GPIO18. The driver's swap_xy turns its portrait report landscape;
- * what is left for touch_port_poll is a 180-degree turn, found on the bench
- * (2026-09-26): a drag to the right moved the bubble column left, and the welcome
- * page's NEXT, at the foot, answered a tap at the top. The display was turned 180
- * degrees the same day, and touch has to follow it. */
+ * its reset on GPIO18. It reports PORTRAIT raw, so the driver's swap_xy turns it
+ * landscape; what is left for touch_port_poll is a 180-degree turn, found on the
+ * bench (2026-09-26): a drag to the right moved the bubble column left, and the
+ * welcome page's NEXT, at the foot, answered a tap at the top. The display was
+ * turned 180 degrees the same day, and touch has to follow it. */
 #define TOUCH_SWAP_XY  1
 #define TOUCH_MIRROR_X 0
 #define TOUCH_MIRROR_Y 1
 #define TOUCH_TURN_180 1
+#define TOUCH_X_MAX    PANEL_W         /* portrait raw: driver swaps to landscape */
+#define TOUCH_Y_MAX    PANEL_H
 #endif
 
 bool touch_port_init(void) {
@@ -122,7 +135,7 @@ bool touch_port_init(void) {
     esp_lcd_panel_io_i2c_config_t io_cfg = ESP_LCD_TOUCH_IO_I2C_FT5x06_CONFIG();
     io_cfg.dev_addr = I2C_ADDR_FT6336; io_cfg.scl_speed_hz = 400000;
     if (esp_lcd_new_panel_io_i2c(board_i2c_bus(), &io_cfg, &io) != ESP_OK) { ESP_LOGW(TAG, "no touch io"); return false; }
-    esp_lcd_touch_config_t tp_cfg = { .x_max = PANEL_W, .y_max = PANEL_H, .rst_gpio_num = PIN_TP_RST, .int_gpio_num = -1,
+    esp_lcd_touch_config_t tp_cfg = { .x_max = TOUCH_X_MAX, .y_max = TOUCH_Y_MAX, .rst_gpio_num = PIN_TP_RST, .int_gpio_num = -1,
         .levels = { .reset = 0, .interrupt = 0 },
         .flags = { .swap_xy = TOUCH_SWAP_XY, .mirror_x = TOUCH_MIRROR_X, .mirror_y = TOUCH_MIRROR_Y } };
     if (esp_lcd_touch_new_i2c_ft5x06(io, &tp_cfg, &s_tp) != ESP_OK) { ESP_LOGW(TAG, "no FT6336"); return false; }

@@ -375,7 +375,20 @@ static void enter_sleep_for(int wake_after_s) {
        RTC clock cover the whole dark stretch at the next boot. The IMU kept
        awake for a face-down wake sleeps now: deep sleep cannot hear it. */
     if (by_face) imu_port_sleep();
-    if (wake_after_s <= 0 && night_powers_off()) {
+    /* CoreS3 has NO GPIO deep-sleep wake: M5Unified (Power_Class.inl CoreS3 case)
+     * notes the AXP2101 PWRON and its IRQ are not wired to the ESP32 (the IRQ is
+     * shared with the RTC INT), and touch-wake (GPIO21 via the AW9523B INTN) is
+     * not armed here - that is a power-sequencing decision deferred to a flash-time
+     * follow-up (see mission NOTES). So an indefinite CoreS3 sleep MUST power off
+     * via the AXP2101 (M5Unified _powerOff = Axp2101.powerOff; the PWR key cold-
+     * boots it) instead of falling to the ext0-on-GPIO0 deep sleep below, which
+     * CoreS3 could never wake from. A timer sleep (wake_after_s>0) still deep-
+     * sleeps and wakes on the timer. */
+    bool power_off = night_powers_off();
+#if CONFIG_POCKET_TANK_BOARD_CORES3
+    if (wake_after_s <= 0) power_off = true;
+#endif
+    if (wake_after_s <= 0 && power_off) {
         batlog_add(battery_pct(), battery_port_vbat_mv(), 0, true, "off");   /* mirrored to NVS: the morning reads it back */
         ESP_LOGI(TAG, "grace over: PMIC power-off (the PWR key or USB boots the tank; the night is lived through at that boot)");
         vTaskDelay(pdMS_TO_TICKS(20));

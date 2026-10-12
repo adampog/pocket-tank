@@ -35,6 +35,12 @@ int  battery_port_vbat_mv(void);
  * per-rail switch for experiments (refuses dcdc1 and anything unknown). */
 bool battery_port_set_rail(const char *name, bool on);
 void battery_port_trim_rails(void);
+/* the CoreS3 LCD backlight is AXP2101 DLDO1, not a PWM GPIO: enable is 0x90 bit7,
+ * voltage is 0x99. Exactly as M5GFX Light_M5StackCoreS3::setBrightness - level 0
+ * disables DLDO1 (and writes 0x99 = 0), otherwise DLDO1 is enabled at the voltage
+ * code (level + 641) >> 5. The CoreS3 display port drives this from backlight_set;
+ * trim_rails keeps DLDO1 on for this board. false = no PMIC. */
+bool battery_port_dldo1_backlight(uint8_t level);
 /* the round 1.75C (2026-10-01): its ES7210 microphone ADC has EVERY supply on
  * A3V3 - the digital and I/O pins too - and with ALDO1 off the dead chip
  * clamps the I2C bus it shares with the PMIC, the touch and the IMU (found at

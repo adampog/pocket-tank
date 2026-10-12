@@ -179,12 +179,38 @@ bool battery_port_set_rail(const char *name, bool on) {
     ESP_LOGW("battery", "no such rail '%s' (dcdc1 and the RTC LDO are never switched)", name);
     return false;
 }
-/* boot: everything with no consumer off, plus ALDO1 (audio analog, unused) */
+/* boot: everything with no consumer off, plus ALDO1 (audio analog, unused).
+ * On the CoreS3 DLDO1 is the LCD backlight (not an unused output), so it is kept
+ * on - the panel's own power is the SY7088 boost on the AW9523B, not an AXP rail,
+ * so the rest of the list still trims the same as on the AMOLED board. */
 void battery_port_trim_rails(void) {
     static const char *off[] = { "dcdc2", "dcdc3", "dcdc4", "aldo1", "aldo2", "aldo3", "aldo4", "bldo1", "bldo2", "cpusldo", "dldo1", "dldo2" };
-    int n = 0;
-    for (size_t i = 0; i < sizeof off / sizeof off[0]; i++) n += battery_port_set_rail(off[i], false);
-    ESP_LOGI("battery", "rails trimmed: %d of %d unused outputs off (dcdc1 = VCC3V3 and the RTC LDO stay)", n, (int)(sizeof off / sizeof off[0]));
+    int n = 0, total = 0;
+    for (size_t i = 0; i < sizeof off / sizeof off[0]; i++) {
+#if CONFIG_POCKET_TANK_BOARD_CORES3
+        if (!strcasecmp(off[i], "dldo1")) continue;   /* CoreS3 backlight: never trimmed */
+#endif
+        total++;
+        n += battery_port_set_rail(off[i], false);
+    }
+    ESP_LOGI("battery", "rails trimmed: %d of %d unused outputs off (dcdc1 = VCC3V3 and the RTC LDO stay)", n, total);
+}
+
+/* CoreS3 LCD backlight on AXP2101 DLDO1 (reg 0x99 voltage, reg 0x90 bit7 enable),
+ * exactly as M5GFX Light_M5StackCoreS3::setBrightness: a level of 0 turns DLDO1
+ * off (and writes 0x99 = 0), otherwise DLDO1 is enabled at voltage code
+ * (level + 641) >> 5. The CoreS3 display port's backlight_set calls this; the
+ * other boards drive a PWM GPIO instead. */
+bool battery_port_dldo1_backlight(uint8_t level) {
+    if (!s_dev) return false;
+    uint8_t v;
+    if (!rd(0x90, &v)) return false;
+    if (level) {
+        if (!wr(0x90, (uint8_t)(v | 0x80))) return false;   /* DLDO1 enable  (0x90 bit7) */
+        return wr(0x99, (uint8_t)((level + 641) >> 5));      /* DLDO1 voltage (0x99) */
+    }
+    if (!wr(0x90, (uint8_t)(v & ~0x80))) return false;       /* DLDO1 disable */
+    return wr(0x99, 0);
 }
 
 int battery_port_vbat_mv(void) {

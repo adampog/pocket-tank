@@ -16,6 +16,7 @@
  * as the AMOLED port does - board_i2c_bus() is how everything else reaches it. */
 #include "display_port.h"
 #include "board_pins.h"
+#include "battery_port.h"                       /* CoreS3 backlight: AXP2101 DLDO1 */
 #include "tank.h"
 #include "driver/spi_master.h"
 #include "driver/i2c_master.h"
@@ -64,7 +65,8 @@ static bool on_trans_done(esp_lcd_panel_io_handle_t io, esp_lcd_panel_io_event_d
 static void backlight_init(void) {
 #if PIN_LCD_BL < 0
     /* No PWM backlight GPIO (CoreS3: the backlight is AXP2101 DLDO1, driven in
-     * slice 03). Configuring an LEDC channel on GPIO -1 aborts, so skip it. */
+     * backlight_set via battery_port_dldo1_backlight). Configuring an LEDC
+     * channel on GPIO -1 aborts, so skip it. */
 #else
     ledc_timer_config_t timer = { .speed_mode = LEDC_LOW_SPEED_MODE, .duty_resolution = LEDC_TIMER_8_BIT,
                                   .timer_num = BL_TIMER, .freq_hz = 5000, .clk_cfg = LEDC_AUTO_CLK };
@@ -76,8 +78,13 @@ static void backlight_init(void) {
 }
 
 static void backlight_set(uint8_t level) {
-#if PIN_LCD_BL < 0
-    (void)level;   /* DLDO1 backlight is slice 03 */
+#if CONFIG_POCKET_TANK_BOARD_CORES3
+    /* CoreS3 backlight = AXP2101 DLDO1 (reg 0x99 voltage, 0x90 bit7 enable), not a
+     * PWM GPIO. Driven through the AXP2101 port (M5GFX Light_M5StackCoreS3); a
+     * level of 0 (display_port_sleep) turns DLDO1 off and wake restores it. */
+    battery_port_dldo1_backlight(level);
+#elif PIN_LCD_BL < 0
+    (void)level;
 #else
     ledc_set_duty(LEDC_LOW_SPEED_MODE, BL_CHANNEL, level);
     ledc_update_duty(LEDC_LOW_SPEED_MODE, BL_CHANNEL);

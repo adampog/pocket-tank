@@ -79,21 +79,43 @@ extern i2c_master_bus_handle_t board_i2c_bus(void);
 extern bool board_is_v2(void);
 
 #if CONFIG_POCKET_TANK_BOARD_CYD28 || CONFIG_POCKET_TANK_BOARD_CORES3
-/* The CYD's FT6336G, and the CoreS3's FT6336 at the same 0x38 (both the FT5x06
- * register family): the CoreS3 rides this path for now so the build links with
- * the right touch driver. Its real bring-up (the internal 12/11 bus, the
- * AW9523B INT at GPIO21, PIN_TP_RST via the expander) is a later slice; here
- * PIN_TP_RST is -1, so the shared init just needs it to compile.
- * The CYD's FT6336G (the same FT5x06 register family) on the shared bus, with
- * its reset on GPIO18 (CoreS3: -1). The driver's swap_xy turns its portrait report
- * landscape; what is left for touch_port_poll is a 180-degree turn, found on
- * the bench (2026-09-26): a drag to the right moved the bubble column left,
- * and the welcome page's NEXT, at the foot, answered a tap at the top. The
- * display was turned 180 degrees the same day, and touch has to follow it. */
+/* Two boards share the FT5x06-register-family driver on the shared I2C bus at
+ * 0x38: the CYD's FT6336G and the CoreS3's FT6336. The shared init below is the
+ * same esp_lcd_touch_new_i2c_ft5x06 path; the orientation flags are each board's
+ * own (the panels are mounted differently), so they are set per board here. */
+#if CONFIG_POCKET_TANK_BOARD_CORES3
+/* CoreS3 FT6336 (M5GFX Touch_M5StackCoreS3): 0x38 on the internal 12/11 bus,
+ * INT at GPIO21 behind the AW9523B - so we POLL (int_gpio=-1) rather than wire
+ * the expander INT, and the panel reset is the AW9523B P1_1 net driven in the
+ * slice-02 bring-up (PIN_TP_RST=-1, no touch-reset GPIO). This is the intended
+ * CoreS3 config, not a CYD accident.
+ *
+ * Orientation: M5GFX reads this FT6336 as LANDSCAPE 320x240 (x_max 319, y_max
+ * 239) aligned to the ILI9342C with NO extra mirror (Touch_M5StackCoreS3 sets
+ * offset_rotation 0; the panel is rotation 1 + offset_rotation 3, invert on).
+ * The CoreS3 display flags equal the CYD's (board_pins.h: SWAP_XY on, no mirror),
+ * so as a provisional default the CoreS3 touch uses the CYD's bench-found
+ * transform (swap to landscape, then a 180 turn). The EXACT swap/mirror/turn for
+ * this panel is a flash-time bench item (HANDOFF.md / slice 06): M5GFX does not
+ * apply the CYD's 180 to the CoreS3, and the ILI9342C is landscape-native (the
+ * CYD's ILI9341 is portrait-native), so if a tap lands 180-rotated clear
+ * TOUCH_TURN_180, and if it is mirrored flip TOUCH_MIRROR_Y. */
 #define TOUCH_SWAP_XY  1
 #define TOUCH_MIRROR_X 0
 #define TOUCH_MIRROR_Y 1
 #define TOUCH_TURN_180 1
+#else  /* CYD28 */
+/* The CYD's FT6336G (the same FT5x06 register family) on the shared bus, with
+ * its reset on GPIO18. The driver's swap_xy turns its portrait report landscape;
+ * what is left for touch_port_poll is a 180-degree turn, found on the bench
+ * (2026-09-26): a drag to the right moved the bubble column left, and the welcome
+ * page's NEXT, at the foot, answered a tap at the top. The display was turned 180
+ * degrees the same day, and touch has to follow it. */
+#define TOUCH_SWAP_XY  1
+#define TOUCH_MIRROR_X 0
+#define TOUCH_MIRROR_Y 1
+#define TOUCH_TURN_180 1
+#endif
 
 bool touch_port_init(void) {
     esp_lcd_panel_io_handle_t io;

@@ -22,6 +22,6 @@ esptool.py --chip esp32s3 merge_bin --fill-flash-size 16MB -o "$IMG" \
   0x290000 "$MODEL" >/dev/null
 ls -la "$IMG" | awk '{print "flash image:", $5, "bytes"}'
 if [ "$B" = "build_qemu" ]; then PSRAM="-m 4M"; else PSRAM="-m 8M -global driver=ssi_psram,property=is_octal,value=true"; fi
-exec qemu-system-xtensa -nographic -machine esp32s3 $PSRAM \
+exec qemu-system-xtensa -accel tcg,thread=single -nographic -machine esp32s3 $PSRAM \
   -drive file="$IMG",if=mtd,format=raw,file.locking=off \
   -serial mon:stdio "$@"

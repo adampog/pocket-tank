@@ -1,31 +1,4 @@
 menu "pocket-tank"
-    choice POCKET_TANK_BOARD
-        prompt "Board"
-        default POCKET_TANK_BOARD_AMOLED18
-        help
-            Which board the firmware is built for. Selects the pins, the tank
-            size (common/tank.h) and which display / touch ports can be used.
-        config POCKET_TANK_BOARD_AMOLED18
-            bool "Waveshare ESP32-S3-Touch-AMOLED-1.8 (448x368)"
-        config POCKET_TANK_BOARD_CYD28
-            bool "2.8in ESP32-S3 CYD, ES3C28P: ILI9341 + FT6336 (320x240)"
-        config POCKET_TANK_BOARD_TLCD2
-            bool "Waveshare ESP32-S3-Touch-LCD-2: ST7789T3 + CST816D (320x240)"
-    endchoice
-    config POCKET_TANK_TANK_320X240
-        bool
-        default y if POCKET_TANK_BOARD_CYD28 || POCKET_TANK_BOARD_TLCD2
-        help
-            The small landscape boards: common/tank.h lays the tank out at
-            320x240, and touch arrives already landscape from the driver.
-    config POCKET_TANK_DISPLAY_ILI9341
-        bool "Drive the CYD's ILI9341 over SPI, backlight PWM on GPIO45"
-        depends on POCKET_TANK_BOARD_CYD28
-        default n
-    config POCKET_TANK_DISPLAY_ST7789
-        bool "Drive the Touch-LCD-2's ST7789T3 over SPI, backlight PWM"
-        depends on POCKET_TANK_BOARD_TLCD2
-        default n
     config POCKET_TANK_DISPLAY_SH8601
         bool "Drive the Waveshare 1.8in AMOLED (SH8601 / CO5300 over QSPI)"
         default n
@@ -52,6 +25,107 @@ menu "pocket-tank"
             watch, on its side and centred in the glass. Build it with
             SDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.watch" into its
             own build directory and sdkconfig (docs/board-amoled-2.06-watch.md).
+    config POCKET_TANK_SQUARE
+        bool "The SQUARE build: a 480x480 tank for the Waveshare ESP32-S3-Touch-AMOLED-2.16"
+        default n
+        depends on !POCKET_TANK_ROUND && !POCKET_TANK_WATCH
+        help
+            On = TANK_SQUARE: the tank fills the 2.16's square glass; that
+            image shows nothing on the other boards. Build it with
+            SDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.square" into its
+            own build directory and sdkconfig (docs/board-amoled-2.16.md).
+    config POCKET_TANK_CYD28
+        bool "The CYD build (this fork): the 2.8in ESP32-S3 CYD, ES3C28P - ILI9341 + FT6336, 320x240"
+        default n
+        depends on !POCKET_TANK_ROUND && !POCKET_TANK_WATCH && !POCKET_TANK_SQUARE && !POCKET_TANK_P4
+        help
+            On = TANK_CYD28: the rectangle's own 448x368 world (nothing in
+            common/ is laid out for this glass), shown on the CYD's 320x240
+            panel by the display port's area-filtered downscale
+            (display_port_spi.c, qvga_scale.h); touches come back through the
+            same scale. Its own board id (version.h PT_BOARD "cyd28"): it never
+            takes another board's update. Build it with
+            SDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.cyd" into its own
+            build directory (tools/build_cyd.sh, docs/CYD.md).
+    config POCKET_TANK_TLCD2
+        bool "The LCD-2 build (this fork): the Waveshare ESP32-S3-Touch-LCD-2 - ST7789T3 + CST816D, 320x240"
+        default n
+        depends on !POCKET_TANK_ROUND && !POCKET_TANK_WATCH && !POCKET_TANK_SQUARE && !POCKET_TANK_P4 && !POCKET_TANK_CYD28
+        help
+            On = TANK_TLCD2: as the CYD build, on the Touch-LCD-2 (PT_BOARD
+            "tlcd2"). SDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.tlcd2"
+            (tools/build_tlcd2.sh).
+    config POCKET_TANK_DISPLAY_QVGA_SPI
+        bool "Drive a 320x240 SPI panel (the CYD's ILI9341, the LCD-2's ST7789), the frame scaled down to it"
+        default n
+        depends on POCKET_TANK_CYD28 || POCKET_TANK_TLCD2
+    config POCKET_TANK_P4
+        bool "The HOME TANK build: a 640x400 tank shown at 2x on the Waveshare ESP32-P4-WIFI6-Touch-LCD-10.1"
+        default n
+        depends on IDF_TARGET_ESP32P4
+        help
+            On = TANK_P4: the rectangle's world a half again as wide, drawn 2x
+            by the P4's PPA onto its 1280x800 IPS glass. Its own target (an
+            ESP32-P4, ESP-IDF 5.5): tools/flash_p4.sh builds it with
+            SDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.p4" into its own
+            build directory (docs/board-p4-10.1.md).
+    config POCKET_TANK_TAB5
+        bool "The SMALL HOME TANK: the P4 home tank build on the M5Stack Tab5 (5in 1280x720)"
+        default n
+        depends on POCKET_TANK_P4
+        help
+            On = TANK_TAB5 beside TANK_P4: the home tank's world 720 tall, the
+            Tab5's ST7121 / ST7123 / ILI9881C panel, its touch, its PI4IOE5V6408
+            expanders. tools/flash_tab5.sh builds it with
+            SDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.p4;sdkconfig.tab5"
+            (docs/board-tab5.md).
+    config POCKET_TANK_P4_LCD7
+        bool "BETA: the home tank on the Waveshare ESP32-P4-WIFI6-Touch-LCD-7 (7in 720x1280, ILI9881C)"
+        default n
+        depends on POCKET_TANK_P4 && !POCKET_TANK_TAB5
+        help
+            On = TANK_P4_LCD7 + TANK_TAB5's 720-tall world: the 10.1's board
+            (pins, codec, touch chip, console) with Waveshare's 7 inch panel -
+            an ILI9881C at 1000 Mbps a lane and its panel controller at I2C
+            0x45. Untried on a board (nobody here owns one): BETA.
+            tools/flash_p4_beta.sh 7 builds it with
+            SDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.p4;sdkconfig.p4lcd7"
+            (docs/board-p4-7-8-beta.md). Not the -7B (1024x600): another board.
+    config POCKET_TANK_P4_LCD8
+        bool "BETA: the home tank on the Waveshare ESP32-P4-WIFI6-Touch-LCD-8 (8in 800x1280, JD9365)"
+        default n
+        depends on POCKET_TANK_P4 && !POCKET_TANK_TAB5 && !POCKET_TANK_P4_LCD7
+        help
+            On = TANK_P4_LCD8: the 10.1's image with the 8 inch panel's own
+            JD9365 init table (Waveshare's BSP). Untried on a board: BETA.
+            tools/flash_p4_beta.sh 8 (docs/board-p4-7-8-beta.md).
+    config POCKET_TANK_DISPLAY_JD9365
+        bool "Drive the Waveshare 10.1in IPS (JD9365 over MIPI-DSI, the P4 home tank)"
+        default n
+        depends on IDF_TARGET_ESP32P4
+    config POCKET_TANK_NO_RADIO
+        bool "No radio in this image: the network and link ports are stubs"
+        default n
+        help
+            The P4's radio is a C6 over esp-hosted, not the esp_wifi driver:
+            until that path is in, its image carries no Wi-Fi (no update
+            page, no tank link, no internet time). Every port still answers.
+    config POCKET_TANK_RADIO_HOSTED
+        bool "The P4's radio: the C6 beside it through esp_hosted, the tank link through our relay"
+        default n
+        depends on IDF_TARGET_ESP32P4
+        help
+            The home tank WITH its radio chip (docs/board-p4-10.1.md, "The
+            radio"): link_port_hosted.c speaks ESP-NOW through the C6's
+            relay (firmware-c6/). The network port is still the stub. Built
+            by tools/flash_p4.sh --radio (PT_P4_RADIO=1 brings the hosted
+            components into the build; sdkconfig.p4radio sets this).
+    config POCKET_TANK_CONSOLE_UART
+        bool "The director console on UART0 instead of the USB serial port"
+        default n
+        help
+            The P4 board's native USB port is not wired to its Type-C: the
+            bench talks over the CH343 UART bridge (UART0, 115200).
     config POCKET_TANK_TOUCH_FT3168
         bool "Read the FT3168 capacitive touch (taps / holds)"
         default n
@@ -60,46 +134,14 @@ menu "pocket-tank"
         default n
         help
             Enable for the real board (docs/AUDIO.md). Off = stub audio port: cues compile, nothing plays.
-    config POCKET_TANK_IMU_QMI8658
-        bool "Look for a QMI8658 IMU (I2C 0x6B / 0x6A)"
-        default y
-        help
-            The AMOLED board's IMU, and the part the CYD is waiting for.
-            Probed first at boot; the screen's 180-degree flip and the
-            handling detector run on whichever enabled IMU answers.
-    config POCKET_TANK_IMU_QMI8658_UP_AXIS
-        int "QMI8658: the axis along the screen's up (0=X 1=Y 2=Z)"
-        range 0 2
-        default 1
-        depends on POCKET_TANK_IMU_QMI8658
-        help
-            The default is the AMOLED board's, calibrated 2026-08-28. A
-            QMI8658 mounted elsewhere is a bench fact: hold the board right
-            side up and run the director's `imu`.
-    config POCKET_TANK_IMU_QMI8658_UP_NEGATIVE
-        bool "QMI8658: that axis reads negative when held right side up"
-        default y
-        depends on POCKET_TANK_IMU_QMI8658
-    config POCKET_TANK_IMU_QMI8658_OUT_AXIS
-        int "QMI8658: the axis out of the glass (0=X 1=Y 2=Z)"
-        range 0 2
-        default 2
-        depends on POCKET_TANK_IMU_QMI8658
-    config POCKET_TANK_IMU_QMI8658_OUT_NEGATIVE
-        bool "QMI8658: that axis reads negative lying flat, screen up"
-        default n
-        depends on POCKET_TANK_IMU_QMI8658
-        help
-            Only the face-down gesture uses it. Not measured on the AMOLED,
-            which does not enable the gesture.
     config POCKET_TANK_IMU_MPU6050
         bool "Look for an MPU-6050 IMU (I2C 0x68 / 0x69)"
-        default y if POCKET_TANK_BOARD_CYD28
+        default y if POCKET_TANK_CYD28
         default n
         help
             The CYD has no IMU of its own; an MPU-6050 breakout on its I2C
-            socket stands in (docs/CYD.md). Probed after the QMI8658, so a
-            board carrying both uses the QMI8658.
+            socket stands in (docs/CYD.md). Probed after the QMI8658
+            (imu_port_qmi8658.c), so a board carrying both uses the QMI8658.
     config POCKET_TANK_IMU_MPU6050_UP_AXIS
         int "MPU-6050: the axis along the screen's up (0=X 1=Y 2=Z)"
         range 0 2
@@ -131,7 +173,7 @@ menu "pocket-tank"
     config POCKET_TANK_IMU_AUTO_FLIP
         bool "The IMU turns the picture over when the board is turned over"
         default y
-        depends on (POCKET_TANK_IMU_QMI8658 || POCKET_TANK_IMU_MPU6050) && !POCKET_TANK_IMU_FACE_DOWN_SLEEP
+        depends on !POCKET_TANK_IMU_FACE_DOWN_SLEEP
         help
             Off: the IMU only senses handling (the tank light, the codec's
             warm-up), and the settings page's SCREEN row alone says which
@@ -139,9 +181,8 @@ menu "pocket-tank"
             let the IMU turn the picture.
     config POCKET_TANK_IMU_FACE_DOWN_SLEEP
         bool "Face down sleeps the tank, face up wakes it (a settings toggle)"
-        default y if POCKET_TANK_BOARD_CYD28
+        default y if POCKET_TANK_CYD28
         default n
-        depends on POCKET_TANK_IMU_QMI8658 || POCKET_TANK_IMU_MPU6050
         help
             Screen down and still for 2 s is a short press of the sleep key;
             turned face up within the 20-minute grace, the tank wakes in place.

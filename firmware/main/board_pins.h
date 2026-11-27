@@ -23,81 +23,34 @@
  * RTC chip unlike it: no expander + ES7210 + RTC = the watch. DSI_PWR_EN is
  * not a GPIO: it is pulled up to ALDO2, so that rail IS the panel's power
  * switch. PWR key sense on GPIO 10 (SYS_OUT), an SD slot (1/2/3/17) and a
- * vibration motor (GPIO 18, fed from ALDO3) the tank does not use. */
+ * vibration motor (GPIO 18, fed from ALDO3) the tank does not use.
+ *
+ * Waveshare ESP32-S3-Touch-AMOLED-2.16, the SQUARE (2026-10-12; 480x480
+ * CO5300 + CST9220, a desk box with the USB at its foot). Sources:
+ * resources/ESP32-S3-Touch-AMOLED-2.16/ (schematic, wiki page) and Waveshare's
+ * BSP (waveshare/esp32_s3_touch_amoled_2_16: the init sequence, the touch
+ * driver = the 1.75C's CST9217 family). No expander: resets on GPIOs 39 / 40;
+ * the clock on 38 like the 1.75C; an ES7210 and an RTC like the watch - the
+ * same I2C signature, so it is told from the watch by its touch chip
+ * (CST92xx at 0x5A, the watch's FT3168 at 0x38). The panel's 3V3 is VCC3V3
+ * (no rail to cut, as the 1.75C) with DSI_PWR_EN pulled up. Audio pins as the
+ * 1.8's but the master clock on GPIO 42 (16 is SYS_OUT, the PWR key sense).
+ *
+ * Waveshare ESP32-S3-Touch-AMOLED-1.75 (and -B, the same board in a plastic
+ * case; -G adds a GPS), 2026-10-17, BETA - no board on the bench: a keeper
+ * (Bryan) has the -B. Sources: resources/ESP32-S3-Touch-AMOLED-1.75/ (the
+ * schematic's GPIO table) and Waveshare's HARDWARE_REFERENCE for it. The
+ * 1.75C's panel (CO5300 466 round) and touch (CST9217 at 0x5A, INT 11) with
+ * the clock on 38, but its resets on 39 / 40 (the square's numbers; 1 / 2 / 3
+ * are an SD slot here), a TCA9554 at 0x20 like the 1.8's - P3 RTC_INT,
+ * P4 SYS_OUT (the PWR key sense), P5 AXP_IRQ, P6 QMI_INT1, P7 GPS_RST, all
+ * inputs: no resets on it - an RTC (PCF85063) unlike the 1.75C, an ES7210
+ * on A3V3 = ALDO1 (the 1.75C's trap: off, it clamps the bus) and the audio
+ * master clock on 42. Told from the 1.8 by the ES7210: expander + ES7210.
+ * Before this, the board took the 1.8's path: wrong clock pin, its panel
+ * reset never driven, and the 1.8's rail trim cut ALDO1 - a dark glass. */
 #ifndef BOARD_PINS_H
 #define BOARD_PINS_H
-#include "sdkconfig.h"
-
-#if CONFIG_POCKET_TANK_BOARD_CYD28
-/* The 2.8" ESP32-S3 CYD, ES3C28P (lcdwiki.com, ES3C28P_ES2N28P_Specification_V1.0
- * section 4.2). A stock board, no modifications: everything below is as the
- * vendor wires it. The LCD's reset is CHIP_PU - it resets with the chip, so
- * there is no reset pin to drive. */
-#define PIN_LCD_CS        10
-#define PIN_LCD_DC        46       /* high = data, low = command */
-#define PIN_LCD_SCLK      12
-#define PIN_LCD_MOSI      11
-#define PIN_LCD_MISO      13
-#define PIN_LCD_BL        45       /* high = backlight on; PWM for brightness */
-#define PIN_LCD_RST       -1       /* CHIP_PU */
-/* How the glass is mounted, found on the bench (display_port_spi.c). swap_xy
- * turns the portrait panel landscape; the two mirrors pick which corner is
- * the origin. The colour order and inversion are the two other things CYD
- * clones differ in. 40 MHz is inside what every ILI9341 clone takes for
- * writes; 80 is worth a try once the picture is right (a frame is 30 ms at 40). */
-#define LCD_PCLK_HZ       (40 * 1000 * 1000)
-#define LCD_SWAP_XY       true
-#define LCD_MIRROR_X      false
-#define LCD_MIRROR_Y      false
-#define LCD_BGR           true
-#define LCD_INVERT        true     /* IPS ILI9341V panels want inversion on */
-#define PIN_I2C_SDA       16       /* shared: touch, audio codec, the I2C socket */
-#define PIN_I2C_SCL       15
-#define PIN_TP_RST        18       /* low = reset */
-#define PIN_TP_INT        17       /* low while touched (the port polls instead) */
-#define I2C_ADDR_FT6336   0x38
-#define PANEL_W           240      /* native portrait; the panel scans landscape (MADCTL) */
-#define PANEL_H           320
-/* audio: the ES8311 (I2C 0x18) on I2S, and the power amplifier's enable */
-#define PIN_I2S_MCLK      4
-#define PIN_I2S_BCLK      5
-#define PIN_I2S_WS        7
-#define PIN_I2S_DOUT      8        /* ESP -> codec DSDIN; GPIO6 is the microphone's way back, unused */
-#define PIN_AMP_EN        1
-#define AMP_EN_ON         0        /* the spec: "low level enable" */
-#elif CONFIG_POCKET_TANK_BOARD_TLCD2
-/* The Waveshare ESP32-S3-Touch-LCD-2 (waveshare.com/wiki/ESP32-S3-Touch-LCD-2:
- * the ESP-IDF demos' main.c, the Arduino factory app, and the schematic's
- * netlist). A stock board, no modifications. The LCD's and the touch panel's
- * resets are one net with a pull-up (and an unfitted link to GPIO0): no reset
- * pin to drive, the driver sends the software reset. No codec, no PMIC, no
- * RTC chip; the charger's status only lights an LED. */
-#define PIN_LCD_CS        45       /* a strapping pin: no pull-up on it, ever */
-#define PIN_LCD_DC        42       /* high = data, low = command */
-#define PIN_LCD_SCLK      39       /* shared with the TF card */
-#define PIN_LCD_MOSI      38       /* shared with the TF card */
-#define PIN_LCD_MISO      40       /* the TF card's only: the panel is write-only */
-#define PIN_LCD_BL        1        /* high = backlight on (an NPN low-side switch); PWM for brightness */
-#define PIN_LCD_RST       -1
-#define PIN_SD_CS         41       /* held high: the card stays off the panel's bus */
-/* The factory app's landscape: rotation 1 = MADCTL MX | MV, RGB order, IPS
- * inversion on; Waveshare's demos clock the panel at 80 MHz. */
-#define LCD_PCLK_HZ       (80 * 1000 * 1000)
-#define LCD_SWAP_XY       true
-#define LCD_MIRROR_X      true
-#define LCD_MIRROR_Y      false
-#define LCD_BGR           false
-#define LCD_INVERT        true
-#define PIN_I2C_SDA       48       /* shared: touch, IMU, the P2 header */
-#define PIN_I2C_SCL       47
-#define PIN_TP_RST        -1       /* the LCD's reset net (above) */
-#define PIN_TP_INT        46       /* low while touched (the port polls instead); a strapping pin */
-#define I2C_ADDR_CST816D  0x15
-#define PIN_IMU_INT1      3        /* QMI8658 at 0x6B, unused (the port polls) */
-#define PIN_BAT_ADC       5        /* ADC1_CH4: VBAT through 200K / 100K, so x3 */
-#define PANEL_W           240      /* native portrait; the panel scans landscape (MADCTL) */
-#define PANEL_H           320
-#else
 #define PIN_LCD_CS        12
 #define PIN_LCD_PCLK      11
 #define PIN_LCD_DATA0     4
@@ -113,17 +66,7 @@
 #define PANEL_W           368      /* native portrait */
 #define PANEL_H           448
 #define V2_PANEL_X_GAP    0x10
-/* audio (resources/ESP32-S3-Touch-AMOLED-1.8.pdf): the ES8311 on I2S, the NS4150B's CTRL */
-#define PIN_I2S_MCLK      16
-#define PIN_I2S_BCLK      9
-#define PIN_I2S_WS        45
-#define PIN_I2S_DOUT      8        /* ESP -> codec DSDIN */
-#define PIN_AMP_EN        46       /* NS4150B CTRL, 10k pulldown on the board */
-#define AMP_EN_ON         1
 
-/* The round 1.75C and the 2.06 watch are AMOLED-family (QSPI) variants of this
- * #else branch, told apart at boot by board_is_round()/board_is_watch(); their
- * pin/panel overrides are globals the display/touch/audio ports pick at runtime. */
 /* ---- the 1.75C ---- */
 #define R_PIN_LCD_PCLK    38
 #define R_PIN_LCD_RST     1
@@ -132,7 +75,8 @@
 #define R_PIN_TP_INT      11
 #define R_PIN_IMU_INT1    21       /* unused */
 #define R_PIN_PWR_SENSE   3        /* SYS_OUT: high while the PWR key is down (unused: the PMIC is asked, as on the 1.8) */
-#define I2C_ADDR_ES7210   0x40     /* the microphone ADC (probe, with no expander => the 1.75C) */
+#define I2C_ADDR_ES7210   0x40     /* the microphone ADC (probe, with no expander => the 1.75C). Its BASE: AD0 / AD1 put it at 0x40 + 0..3
+                                      (a 1.75C rev 1.1 answers at 0x42) - the probe tries all four (board_probe.h), board_es7210_addr() says which */
 #define I2C_ADDR_CST9217  0x5A
 #define R_PANEL           466      /* round: 466 across, the corners of the square are not there */
 #define R_PANEL_X_GAP     6
@@ -150,5 +94,177 @@
 #define W_PANEL_W         410      /* native portrait */
 #define W_PANEL_H         502
 #define W_PANEL_X_GAP     0x16
-#endif  /* board */
+
+/* ---- the 2.16 square ---- */
+#define S_PIN_LCD_PCLK    38
+#define S_PIN_LCD_RST     39
+#define S_PIN_TP_RST      40
+#define S_PIN_TP_INT      11       /* unused: polled */
+#define S_PIN_LCD_TE      13       /* unused (the RTC's INT shares the number on the wiki table: TE is on the panel header) */
+#define S_PIN_PWR_SENSE   16       /* SYS_OUT: high while the PWR key is down */
+#define S_PIN_I2S_MCLK    42
+#define S_PIN_KEY3        18       /* the user button (unused) */
+#define S_PANEL           480
+#define S_PANEL_X_GAP     0
+/* ---- the P4 HOME TANK (Waveshare ESP32-P4-WIFI6-Touch-LCD-10.1, 2026-10-12) ----
+ * Its own target and image (TANK_P4): nothing is probed to tell it apart.
+ * Sources: Waveshare's BSP (waveshare/esp32_p4_wifi6_touch_lcd_x 2.0.3) and
+ * resources/ESP32-P4-Touch-LCD-10.1/. A 10.1" IPS over two MIPI-DSI lanes
+ * (JD9365), a GT911-class touch sharing the panel's reset, the C6 radio over
+ * SDIO (not driven yet), ES8311 + ES7210 + a speaker amp, a backlight on PWM.
+ * No PMIC, no IMU, no RTC chip, no expander. The BOOT key is the P4's own
+ * strapping pin, 35 (not 0). The native USB is not wired to a port: the
+ * console is UART0 through the CH343. */
+#define P4_PIN_I2C_SDA    7
+#define P4_PIN_I2C_SCL    8
+#define P4_PIN_LCD_RST    27       /* the touch chip's reset too */
+#define P4_PIN_LCD_BL     26       /* backlight (LEDC PWM) */
+#define P4_PIN_I2S_MCLK   13
+#define P4_PIN_I2S_BCLK   12
+#define P4_PIN_I2S_WS     10
+#define P4_PIN_I2S_DOUT   9        /* ESP -> codec DSDIN */
+#define P4_PIN_I2S_DIN    11       /* codec -> ESP (unused) */
+#define P4_PIN_AMP_EN     53
+#define P4_PIN_BOOT       35
+#define I2C_ADDR_GT911    0x5D     /* or 0x14, by the chip's INT level at reset */
+#define I2C_ADDR_GT911_ALT 0x14
+#ifdef TANK_TAB5_HW
+/* ---- the SMALL HOME TANK (M5Stack Tab5, 2026-10-19) ----
+ * The same P4 (but silicon v1.x: its own image), its own board. Sources: M5's
+ * factory firmware (github.com/m5stack/M5Tab5-UserDemo, platforms/tab5:
+ * the BSP component m5stack_tab5 and esp_lcd_st7121) and resources/M5Stack-Tab5/.
+ * A 5" 720 x 1280 IPS over two DSI lanes at 965 Mbps, in THREE revisions told
+ * apart by the touch chip: ILI9881C + GT911 at 0x14 (before 2025-10-14),
+ * ST7123 at 0x55 (its register 0 reads 3), ST7121 at 0x55 (reads 1, from
+ * 2026-04-28). The ST712x are display + touch in one chip (TDDI). The resets,
+ * the speaker amp, the C6's power and the charger hang on two PI4IOE5V6408
+ * expanders; ES8388 + ES7210, BMI270, RX8130CE, INA226 share the bus. The
+ * console is the P4's own USB serial/JTAG on the Type-C. */
+#define P4_PIN_LCD_BL_TAB5 22      /* backlight (LEDC PWM) */
+#define TAB5_PIN_I2C_SDA  31
+#define TAB5_PIN_I2C_SCL  32
+#define TAB5_PIN_TP_INT   23       /* unused: polled */
+#define I2C_ADDR_IOX1     0x43     /* P0 antenna switch, P1 SPK_EN, P2 EXT5V_EN, P4 LCD_RST, P5 TP_RST, P6 CAM_RST, P7 HP_DET (in) */
+#define I2C_ADDR_IOX2     0x44     /* P0 WLAN_PWR_EN, P3 USB5V_EN, P4 PWROFF_PULSE, P5 nCHG_QC_EN, P6 CHG_STAT (in), P7 CHG_EN */
+#define I2C_ADDR_ST712X   0x55
+#define P4_PANEL_W        720      /* native portrait */
+#define P4_PANEL_H        1280
+#define P4_DSI_LANES      2
+#define P4_DSI_MBPS       965
+#elif defined(TANK_P4_LCD7)
+/* ---- BETA (2026-11-22): the Waveshare ESP32-P4-WIFI6-Touch-LCD-7 ----
+ * The 10.1's board (Waveshare's BSP 2.0.3 has ONE pin map for the three sizes,
+ * and their one schematic one "7/8/10.1inch Display" connector) with a 7"
+ * 720 x 1280 ILI9881C panel at 1000 Mbps a lane, two lanes, and a panel
+ * controller on the I2C bus at 0x45 that switches the panel's power and sets
+ * its backlight (Waveshare's esp_lcd_ili9881c 2.0.0 writes it before the
+ * panel starts). NOT SEEN ON A BOARD: docs/board-p4-7-8-beta.md. NOT the -7B. */
+#define P4_PANEL_W        720      /* native portrait: the Tab5's 1280 x 720 world turned onto it */
+#define P4_PANEL_H        1280
+#define P4_DSI_LANES      2
+#define P4_DSI_MBPS       1000
+#define I2C_ADDR_LCD7_MCU 0x45     /* 0x95 power bits, 0x96 backlight 0..255, 0x97 size, 0x98 id, 0x99 version */
+#else                              /* the 10.1, and (BETA) the 8 inch: the same 800 x 1280 grid, rate and lanes in Waveshare's BSP */
+#define P4_PANEL_W        800      /* native portrait: the tank's 640 x 400 is turned and doubled onto it */
+#define P4_PANEL_H        1280
+#define P4_DSI_LANES      2
+#define P4_DSI_MBPS       1500
+#endif
+#define P4_DSI_LDO_CHAN   3        /* LDO_VO3 feeds VDD_MIPI_DPHY (both boards) */
+#define P4_DSI_LDO_MV     2500
+
+/* ---- the 1.75 / 1.75-B (expander, RTC, SD slot): the 1.75C's panel otherwise ---- */
+#define B_PIN_LCD_RST     39
+#define B_PIN_TP_RST      40
+#define B_PIN_I2S_MCLK    42
+/* ---- THIS FORK's two 320 x 240 SPI boards (Q_: "QVGA"), each its own build ----
+ * They run the rectangle's 448 x 368 world; display_port_spi.c scales it down
+ * to their glass (qvga_scale.h) and turns a touch back into the frame.
+ *
+ * The 2.8" ESP32-S3 CYD, ES3C28P (CONFIG_POCKET_TANK_CYD28; lcdwiki.com,
+ * ES3C28P_ES2N28P_Specification_V1.0 section 4.2). A stock board: ILI9341V,
+ * FT6336G touch, an ES8311 with an amplifier enabled LOW, no PMIC, no RTC
+ * chip, no IMU (an MPU-6050 breakout on the I2C socket stands in, docs/CYD.md).
+ * The LCD's reset is CHIP_PU: no reset pin to drive.
+ *
+ * The Waveshare ESP32-S3-Touch-LCD-2 (CONFIG_POCKET_TANK_TLCD2;
+ * waveshare.com/wiki/ESP32-S3-Touch-LCD-2). A stock board: ST7789T3, CST816D
+ * touch, a QMI8658, no codec, no PMIC, no RTC chip. The LCD's and the touch
+ * panel's resets are one net with a pull-up: the driver sends the software
+ * reset. */
+#if defined(__has_include)
+#if __has_include("sdkconfig.h")
+#include "sdkconfig.h"
+#endif
+#endif
+#if CONFIG_POCKET_TANK_CYD28
+#define TANK_QVGA_BOARD   1
+#define Q_PIN_LCD_CS      10
+#define Q_PIN_LCD_DC      46       /* high = data, low = command */
+#define Q_PIN_LCD_SCLK    12
+#define Q_PIN_LCD_MOSI    11
+#define Q_PIN_LCD_MISO    13
+#define Q_PIN_LCD_BL      45       /* high = backlight on; PWM for brightness */
+#define Q_PIN_LCD_RST     -1       /* CHIP_PU */
+/* How the glass is mounted, found on the bench (2026-09-26): swap_xy turns the
+ * portrait panel landscape, the two mirrors pick the origin's corner. */
+#define Q_LCD_PCLK_HZ     (40 * 1000 * 1000)
+#define Q_LCD_SWAP_XY     true
+#define Q_LCD_MIRROR_X    false
+#define Q_LCD_MIRROR_Y    false
+#define Q_LCD_BGR         true
+#define Q_LCD_INVERT      true     /* IPS ILI9341V panels want inversion on */
+#define Q_PIN_I2C_SDA     16       /* shared: touch, audio codec, the I2C socket */
+#define Q_PIN_I2C_SCL     15
+#define Q_PIN_TP_RST      18       /* low = reset */
+#define Q_I2C_ADDR_TOUCH  0x38     /* FT6336G */
+#define Q_TOUCH_CST816    0
+/* the touch driver's flags and the turn left over, as the bench found them
+ * (2026-09-26: a drag right moved left, the foot's NEXT answered at the top) */
+#define Q_TOUCH_SWAP_XY   1
+#define Q_TOUCH_MIRROR_X  0
+#define Q_TOUCH_MIRROR_Y  1
+#define Q_TOUCH_TURN_180  1
+#define Q_TOUCH_X_MAX     240
+#define Q_TOUCH_Y_MAX     320
+/* audio: the ES8311 (I2C 0x18) on I2S, and the power amplifier's enable */
+#define Q_PIN_I2S_MCLK    4
+#define Q_PIN_I2S_BCLK    5
+#define Q_PIN_I2S_WS      7
+#define Q_PIN_I2S_DOUT    8        /* ESP -> codec DSDIN; GPIO6 is the microphone's way back, unused */
+#define Q_PIN_AMP_EN      1
+#define Q_AMP_EN_ON       0        /* the spec: "low level enable" */
+#elif CONFIG_POCKET_TANK_TLCD2
+#define TANK_QVGA_BOARD   1
+#define Q_PIN_LCD_CS      45       /* a strapping pin: no pull-up on it, ever */
+#define Q_PIN_LCD_DC      42       /* high = data, low = command */
+#define Q_PIN_LCD_SCLK    39       /* shared with the TF card */
+#define Q_PIN_LCD_MOSI    38       /* shared with the TF card */
+#define Q_PIN_LCD_MISO    40       /* the TF card's only: the panel is write-only */
+#define Q_PIN_LCD_BL      1        /* high = backlight on (an NPN low-side switch); PWM for brightness */
+#define Q_PIN_LCD_RST     -1
+#define Q_PIN_SD_CS       41       /* held high: the card stays off the panel's bus */
+/* The factory app's landscape: rotation 1 = MADCTL MX | MV, RGB order, IPS
+ * inversion on; Waveshare's demos clock the panel at 80 MHz. */
+#define Q_LCD_PCLK_HZ     (80 * 1000 * 1000)
+#define Q_LCD_SWAP_XY     true
+#define Q_LCD_MIRROR_X    true
+#define Q_LCD_MIRROR_Y    false
+#define Q_LCD_BGR         false
+#define Q_LCD_INVERT      true
+#define Q_PIN_I2C_SDA     48       /* shared: touch, IMU, the P2 header */
+#define Q_PIN_I2C_SCL     47
+#define Q_PIN_TP_RST      -1       /* the LCD's reset net (above) */
+#define Q_I2C_ADDR_TOUCH  0x15     /* CST816D */
+#define Q_TOUCH_CST816    1
+/* the driver mirrors, then swaps: x = raw y, y = 239 - raw x - Waveshare's
+ * factory mapping for this landscape. x_max / y_max are the last pixel. */
+#define Q_TOUCH_SWAP_XY   1
+#define Q_TOUCH_MIRROR_X  1
+#define Q_TOUCH_MIRROR_Y  0
+#define Q_TOUCH_TURN_180  0
+#define Q_TOUCH_X_MAX     239
+#define Q_TOUCH_Y_MAX     319
+#define Q_PIN_BAT_ADC     5        /* ADC1_CH4: VBAT through 200K / 100K, so x3 (unused) */
+#endif
 #endif

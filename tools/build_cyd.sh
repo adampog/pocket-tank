@@ -9,22 +9,23 @@
 # never a /dev/ttyACM<n>: those numbers shuffle between plug-ins.
 #
 # Its own build directory and sdkconfig, so the AMOLED build (tools/flash.sh)
-# is untouched: sdkconfig.defaults, then sdkconfig.defaults.cyd on top.
+# is untouched: sdkconfig.defaults, then sdkconfig.cyd on top. The image is
+# the rectangle's 448x368 tank scaled to the 320x240 glass (docs/CYD.md).
 set -u
 cd "$(dirname "$0")/../firmware"
 BUILD=build_cyd
 PORT="${1:-}"
-IDF=${IDF_PATH:-$HOME/.espressif/esp-idf/v5.5}
+IDF=${IDF_PATH:-$HOME/esp/esp-idf}
 . "$IDF/export.sh" > /dev/null 2>&1 || { echo "build_cyd: ESP-IDF export failed ($IDF)"; exit 1; }
 # The defaults only fill in what an sdkconfig lacks, so a changed default never
 # reaches one that already exists (audio stayed off after its default went on):
 # start the sdkconfig afresh whenever a defaults file is newer than it.
-if [ -f "$BUILD/sdkconfig" ] && { [ sdkconfig.defaults -nt "$BUILD/sdkconfig" ] || [ sdkconfig.defaults.cyd -nt "$BUILD/sdkconfig" ]; }; then
+if [ -f "$BUILD/sdkconfig" ] && { [ sdkconfig.defaults -nt "$BUILD/sdkconfig" ] || [ sdkconfig.cyd -nt "$BUILD/sdkconfig" ]; }; then
   echo "build_cyd: a defaults file changed - regenerating $BUILD/sdkconfig"
   rm -f "$BUILD/sdkconfig"
 fi
-idf.py -B "$BUILD" -D SDKCONFIG="$BUILD/sdkconfig" -D SDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.defaults.cyd" build \
-  2>&1 | grep -E "error|warning: .*display_port_ili9341|binary size|build complete|Project build complete"
+idf.py -B "$BUILD" -D SDKCONFIG="$BUILD/sdkconfig" -D SDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.cyd" build \
+  2>&1 | grep -E "error|warning: .*display_port_spi|binary size|build complete|Project build complete"
 [ "${PIPESTATUS[0]}" -eq 0 ] || { echo "build_cyd: BUILD FAILED - nothing flashed"; exit 1; }
 [ -n "$PORT" ] || exit 0
 case "$PORT" in /dev/serial/by-id/*) ;; *) echo "build_cyd: give the by-id path, not $PORT"; exit 1;; esac

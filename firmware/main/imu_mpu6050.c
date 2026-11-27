@@ -1,4 +1,4 @@
-/* imu_mpu6050.c — an MPU-6050 as imu_port's accelerometer (see imu_chip.h).
+/* imu_mpu6050.c — an MPU-6050 as imu_port's accelerometer (imu_mpu6050.h; imu_port_qmi8658.c asks it when no QMI8658 answers).
  *
  * The stand-in for the CYD while its QMI8658C is on the way: a GY-521-style
  * breakout on the board's shared I2C bus (SDA IO16, SCL IO15, beside the touch
@@ -9,7 +9,7 @@
  * 10 Hz low-pass so a table's noise stays well under MOTION_THRESH, the gyros
  * in standby. Register facts are from the MPU-6000/6050 register map. */
 #include "sdkconfig.h"
-#include "imu_chip.h"
+#include "imu_mpu6050.h"
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -62,7 +62,7 @@ static bool rdn(uint8_t reg, uint8_t *val, size_t n) {
 /* Reset, then configure. The chip comes out of reset ASLEEP, and asleep its
  * data registers read zero - g=[0 0 0], no flip, no motion, no error - so the
  * wake below is the step that matters. */
-static bool mpu_reset_config(void) {
+bool imu_mpu6050_reset_config(void) {
     bool rst = wr8(REG_PWR_MGMT_1, 0x80);
     vTaskDelay(pdMS_TO_TICKS(100));
     (void)wr8(REG_SIGNAL_RESET, 0x07);   /* gyro, accel, temperature paths */
@@ -81,7 +81,7 @@ static bool mpu_reset_config(void) {
     return ok;
 }
 
-static bool mpu_read_accel(int16_t a[3]) {
+bool imu_mpu6050_read(int16_t a[3]) {
     uint8_t raw[6];
     if (!rdn(REG_ACCEL_XOUT_H, raw, 6)) return false;
     a[0] = (int16_t)(raw[0] << 8 | raw[1]);   /* big-endian, where the QMI8658 is little */
@@ -96,33 +96,25 @@ static void forget(void) {
     s_dev = NULL;
 }
 
-static void mpu_sleep(void) {
-    (void)wr8(REG_PWR_MGMT_1, 0x48);          /* asleep, temperature off: a few uA */
+void imu_mpu6050_sleep(void) {
+    if (s_dev) (void)wr8(REG_PWR_MGMT_1, 0x48);   /* asleep, temperature off: a few uA */
+}
+void imu_mpu6050_axes(int *up_axis, int *up_sign, int *out_axis, int *out_up_sign) {
+    *up_axis = UP_AXIS; *up_sign = UP_SIGN; *out_axis = OUT_AXIS; *out_up_sign = OUT_UP_SIGN;
 }
 
-static const struct imu_chip s_chip = {
-    .name = "MPU-6050",
-    .reset_config = mpu_reset_config,
-    .read_accel = mpu_read_accel,
-    .sleep = mpu_sleep,
-    .up_axis = UP_AXIS,
-    .up_sign = UP_SIGN,
-    .out_axis = OUT_AXIS,
-    .out_up_sign = OUT_UP_SIGN,
-};
-
-const struct imu_chip *imu_mpu6050_probe(i2c_master_bus_handle_t bus) {
-    if (!bus) return NULL;
+bool imu_mpu6050_probe(i2c_master_bus_handle_t bus) {
+    if (!bus) return false;
     uint8_t addr = MPU_ADDR;
     if (i2c_master_probe(bus, addr, 50) != ESP_OK) {
         addr = MPU_ADDR_ALT;
-        if (i2c_master_probe(bus, addr, 50) != ESP_OK) { ESP_LOGW(TAG, "no MPU-6050 either"); return NULL; }
+        if (i2c_master_probe(bus, addr, 50) != ESP_OK) { ESP_LOGW(TAG, "no MPU-6050 either"); return false; }
     }
     i2c_device_config_t cfg = { .dev_addr_length = I2C_ADDR_BIT_LEN_7,
                                 .device_address = addr, .scl_speed_hz = 400000 };
-    if (i2c_master_bus_add_device(bus, &cfg, &s_dev) != ESP_OK) return NULL;
+    if (i2c_master_bus_add_device(bus, &cfg, &s_dev) != ESP_OK) return false;
     uint8_t who = 0;
-    if (!rdn(REG_WHO_AM_I, &who, 1)) { ESP_LOGW(TAG, "0x%02x answers but WHO_AM_I does not", addr); forget(); return NULL; }
+    if (!rdn(REG_WHO_AM_I, &who, 1)) { ESP_LOGW(TAG, "0x%02x answers but WHO_AM_I does not", addr); forget(); return false; }
     /* 0x68 is a genuine 6050. Clones sold as "6050" answer with other dies'
      * values; their accel registers match, so take them, and say so. */
     switch (who) {
@@ -136,10 +128,10 @@ const struct imu_chip *imu_mpu6050_probe(i2c_master_bus_handle_t bus) {
         break;
     default:
         ESP_LOGW(TAG, "0x%02x WHO_AM_I 0x%02x: not an MPU-6050", addr, who);
-        forget(); return NULL;
+        forget(); return false;
     }
-    if (!mpu_reset_config()) { ESP_LOGW(TAG, "MPU-6050 config failed"); forget(); return NULL; }
+    if (!imu_mpu6050_reset_config()) { ESP_LOGW(TAG, "MPU-6050 config failed"); forget(); return false; }
     ESP_LOGI(TAG, "MPU-6050 up at 0x%02x: orientation axis %c%c, out of the glass %c", addr,
              UP_SIGN > 0 ? '+' : '-', "XYZ"[UP_AXIS], "XYZ"[OUT_AXIS]);
-    return &s_chip;
+    return true;
 }

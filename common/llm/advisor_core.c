@@ -9,19 +9,19 @@ static q4_model_t *g_model;
 static word_tok_t  g_tok;
 static int   g_schema;                /* 2 | 3 | 4 */
 static int   g_goal_ids[GOAL_COUNT];  /* token id of each goal word */
+static int g_urgency_id = -1;                  /* the literal " urgency" (THE TWO-PASS DECISION) */
+bool advisor_core_two_pass = true;
 static uint32_t g_rng = 0x9E3779B9u;
 static float g_last_p[GOAL_COUNT];
+static volatile bool g_damaged;   /* a decision's odds came back not a number: the model is damaged (notice.h) */
+static bool not_a_number(float v) { uint32_t u; memcpy(&u, &v, 4); return (u & 0x7f800000u) == 0x7f800000u; }   /* NaN or inf, by the bits (no isfinite: a fast-math build may drop it) */
 bool  advisor_core_sample = true;
 float advisor_core_temp   = 1.0f;
 
 /* ---- schema.md state encoding: must match model/gen_traces.py exactly ---- */
-/* Bands in pixels of the 448-wide tank the model was trained on, scaled to
- * this build's width: a 320-wide tank (the CYD) would otherwise almost never
- * see "far", and the model would be asked about distances it never learned. */
-#define SCHEMA_SCALE (TANK_W / 448.0f)
-#define SCHEMA_NEAR (70.0f * SCHEMA_SCALE)
-#define SCHEMA_MID  (180.0f * SCHEMA_SCALE)
-#define SCHEMA_FAR  (380.0f * SCHEMA_SCALE)
+#define SCHEMA_NEAR 70.0f
+#define SCHEMA_MID  180.0f
+#define SCHEMA_FAR  380.0f
 
 static const char *bucket(float d) {
     if (d < SCHEMA_NEAR) return "near";
@@ -115,6 +115,7 @@ bool advisor_core_init(const uint8_t *model_bin, size_t model_len,
         const char *p = word_tok_piece(&g_tok, id);
         if (strcmp(p, " trust") == 0 && g_schema < 3) g_schema = 3;
         if (strcmp(p, " bored") == 0) g_schema = 4;      /* v4: no shadow, + bored */
+        if (strcmp(p, " urgency") == 0) g_urgency_id = id;
         for (int g = 0; g < GOAL_COUNT; g++)
             if (p[0] == ' ' && strcmp(p + 1, GOAL_NAMES[g]) == 0) g_goal_ids[g] = id;
     }
@@ -122,10 +123,12 @@ bool advisor_core_init(const uint8_t *model_bin, size_t model_len,
     if (seed) g_rng = seed;
     return true;
 }
+void advisor_core_reseed(uint32_t seed) { if (seed) g_rng = seed; }   /* (the sim's paired runs: the same decisions from the same water) */
 int advisor_core_schema(void) { return g_model ? g_schema : 0; }
 q4_model_t *advisor_core_model(void) { return g_model; }
 const q4_config_t *advisor_core_config(void) { return g_model ? q4_model_config(g_model) : NULL; }
 const float *advisor_core_last_probs(void) { return g_last_p; }
+bool advisor_core_damaged(void) { return g_damaged; }
 
 goal_t advisor_core_infer(const char *state, int *tokens_out) {
     goal_t g = { GOAL_COUNT, 5, 1.0f, GOAL_COUNT };   /* GOAL_COUNT = "no change" */
@@ -137,12 +140,16 @@ goal_t advisor_core_infer(const char *state, int *tokens_out) {
     float temp = advisor_core_sample ? advisor_core_temp : 0;
     /* max_out 3 = goal + " urgency" + digit: everything the parser reads;
        each extra token would cost a full weight pass */
-    int nout = q4_model_decide(g_model, toks, n, g_goal_ids, GOAL_COUNT, temp, &g_rng,
-                               g_last_p, out, 3);
+    /* THE TWO-PASS DECISION: the goal and the literal " urgency" that follows it go as one
+       batched pass, the digit read from it (q4_model.c); the old three passes otherwise */
+    bool two = advisor_core_two_pass && g_urgency_id >= 0;
+    int nout = q4_model_decide_follow(g_model, toks, n, g_goal_ids, GOAL_COUNT, temp, &g_rng,
+                                      g_last_p, out, 3, two ? &g_urgency_id : NULL, two ? 1 : 0);
     if (tokens_out) *tokens_out = n + nout;
     /* first token is the goal (one of the candidates); then "urgency <d>" */
     if (nout >= 1)
         for (int i = 0; i < GOAL_COUNT; i++) if (out[0] == g_goal_ids[i]) { g.id = (goal_id_t)i; break; }
+    for (int i = 0; i < GOAL_COUNT; i++) if (not_a_number(g_last_p[i])) { g_damaged = true; break; }
     if (g.id < GOAL_COUNT) {
         g.confidence = g_last_p[g.id];
         int ru = -1;

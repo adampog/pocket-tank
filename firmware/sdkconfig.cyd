@@ -1,0 +1,22 @@
+# the CYD build (this fork: the 2.8" ESP32-S3 CYD, ES3C28P): on top of sdkconfig.defaults
+#   idf.py -B <dir> -DSDKCONFIG=<dir>/sdkconfig -DSDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.cyd" build
+# (tools/build_cyd.sh). 16 MB flash and 8 MB octal PSRAM, as the 1.8. The tank is the
+# rectangle's 448x368 world, scaled down to the 320x240 glass by the display port.
+CONFIG_POCKET_TANK_CYD28=y
+CONFIG_POCKET_TANK_DISPLAY_SH8601=n
+CONFIG_POCKET_TANK_DISPLAY_QVGA_SPI=y
+CONFIG_POCKET_TANK_TOUCH_FT3168=y
+# The same ES8311 as the 1.8, on the CYD's own pins (board_pins.h CYD_PIN_*).
+CONFIG_POCKET_TANK_AUDIO_ES8311=y
+# The IMU: a QMI8658 is always probed first (the part the CYD is waiting for);
+# the MPU-6050 stands in for it on the I2C socket (SDA IO16, SCL IO15).
+CONFIG_POCKET_TANK_IMU_MPU6050=y
+# The MPU-6050 flat against the CYD's back, its pins toward the top edge:
+# measured 2026-09-30, upright = X at -0.95 g, flat on its back = Z at -0.79 g
+# (this breakout's Z reads ~0.2 g light; the flip never uses Z).
+CONFIG_POCKET_TANK_IMU_MPU6050_UP_AXIS=0
+CONFIG_POCKET_TANK_IMU_MPU6050_UP_NEGATIVE=y
+CONFIG_POCKET_TANK_IMU_MPU6050_OUT_AXIS=2
+CONFIG_POCKET_TANK_IMU_MPU6050_OUT_NEGATIVE=y
+# Face down for 2 s sleeps the tank, face up within the grace wakes it.
+CONFIG_POCKET_TANK_IMU_FACE_DOWN_SLEEP=y

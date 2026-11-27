@@ -13,7 +13,7 @@ reset the chip before anyone read the log.
    too). It runs `tools/preflight.py` first, which archives `batlog` + `state`
    to `docs/batlog/<date_time>.txt`, and refuses to flash without the archive.
    Commit the archive with the flash. **The 2.8" CYD is the exception:** it is
-   flashed with `tools/build_cyd.sh` (docs/CYD.md). It has no fuel gauge, so
+   flashed with `tools/build_cyd.sh` (and the Touch-LCD-2 with `tools/build_tlcd2.sh`; docs/CYD.md). It has no fuel gauge, so
    there is no battery log to archive, and this table is about the AMOLED tank.
 2. **Any morning after a night on battery: `tools/preflight.py` first**, before
    the director, before a flash, before anything. Then update the table below.

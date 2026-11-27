@@ -17,13 +17,29 @@
  * records PT_RELEASE_NUM of the build that wrote it (progression.c). */
 #ifndef VERSION_H
 #define VERSION_H
+#include <string.h>
 
+/* main is the 0.4 line (2026-10-05, Strato: "bump main to 0.4.0 dev"): the
+ * number sits above every 0.3.x, so the Wi-Fi update never offers a 0.3.x
+ * release (a 0.3.3 included) to a board on a main build (update.c newer()).
+ * 0.3.x fixes live on branch release-0.3.2 and merge forward - keep THIS
+ * number in that merge. At the 0.4.0 release the stage goes back to "alpha". */
 #define PT_RELEASE_MAJOR 0
-#define PT_RELEASE_MINOR 3
+#define PT_RELEASE_MINOR 4
 #define PT_RELEASE_PATCH 3
-#define PT_RELEASE       "0.3.3"
-#define PT_RELEASE_STAGE "alpha"               /* pre-1.0: shown beside the number */
-#define PT_RELEASE_NUM   ((PT_RELEASE_MAJOR << 16) | (PT_RELEASE_MINOR << 8) | PT_RELEASE_PATCH)
+#define PT_RELEASE_HOTFIX 0                    /* a fourth part (2026-10-21): a fix between patches - 0.3.8.1 - that
+                                                  must not burn the next number. 0 = none, and the string has three parts */
+#define PT_RELEASE       "0.4.3"
+#define PT_RELEASE_STAGE "alpha"               /* pre-1.0: shown beside the number ("alpha" in a release; "dev" on main between them) */
+/* the packed number the tank compares (update.c newer(), the save's stamp):
+ * a byte each, major.minor.patch.hotfix. Until 0.3.8 it was three bytes
+ * (major << 16 | minor << 8 | patch): every four-byte number is larger than
+ * every three-byte one, so a tank on 0.3.8 (0x000308) sees 0.3.8.1
+ * (0x00030801) as newer, and 0.3.9 (0x00030900) ranks above both. A manifest's
+ * min_from under 0x10000 is read as the old packing (update.c). Any line that
+ * merges this forward (0.4) takes the four bytes with it, or its 0.4.0 would
+ * rank below 0.3.8.1. tools/make_ota_manifest.py packs the same way. */
+#define PT_RELEASE_NUM   ((PT_RELEASE_MAJOR << 24) | (PT_RELEASE_MINOR << 16) | (PT_RELEASE_PATCH << 8) | PT_RELEASE_HOTFIX)
 
 /* the model this build ships with (model/out/model_q4.bin): its tag, byte
  * length and sha256. The tank's model trailer (firmware/main/model_trailer.c)
@@ -48,10 +64,44 @@
 #elif defined(TANK_WATCH)
 #define PT_BOARD         "watch206"
 #define PT_BOARD_NAME    "ESP32-S3-Touch-AMOLED-2.06"
+#elif defined(TANK_SQUARE)
+#define PT_BOARD         "square216"
+#define PT_BOARD_NAME    "ESP32-S3-Touch-AMOLED-2.16"
+#elif defined(TANK_P4_LCD7)                    /* BETA (2026-11-22, docs/board-p4-7-8-beta.md): before TANK_TAB5, which it also
+                                                  defines for the 720-tall world - its own id, so no update or installer takes it
+                                                  for the Tab5's, the 10.1's or the 8 inch's (nor the -7B's, 1024 x 600: no id) */
+#define PT_BOARD         "p4lcd7"
+#define PT_BOARD_NAME    "ESP32-P4-WIFI6-Touch-LCD-7"
+#elif defined(TANK_P4_LCD8)                    /* BETA (2026-11-22): before TANK_P4, which it also defines */
+#define PT_BOARD         "p4lcd8"
+#define PT_BOARD_NAME    "ESP32-P4-WIFI6-Touch-LCD-8"
+#elif defined(TANK_TAB5)                       /* (before TANK_P4, which the Tab5 also defines: its chip is a v1.x P4 that the
+                                                  10.1's image cannot run, so an update must never take one for the other) */
+#define PT_BOARD         "tab5"
+#define PT_BOARD_NAME    "M5Stack Tab5"
+#elif defined(TANK_CYD28)                      /* this fork's two 320 x 240 boards (firmware/main/display_port_spi.c): the rectangle's
+                                                  world scaled down to their glass. Their OWN ids: upstream publishes no
+                                                  latest-cyd28.json / latest-tlcd2.json, so CHECK FOR UPDATES finds nothing, and a
+                                                  manifest or an image marked for another board (the 1.8's) is refused */
+#define PT_BOARD         "cyd28"
+#define PT_BOARD_NAME    "ESP32-S3 CYD 2.8 (ES3C28P)"
+#elif defined(TANK_TLCD2)
+#define PT_BOARD         "tlcd2"
+#define PT_BOARD_NAME    "ESP32-S3-Touch-LCD-2"
+#elif defined(TANK_P4)
+#define PT_BOARD         "p4home101"
+#define PT_BOARD_NAME    "ESP32-P4-WIFI6-Touch-LCD-10.1"
 #else
 #define PT_BOARD         "amoled18"
 #define PT_BOARD_NAME    "ESP32-S3-Touch-AMOLED-1.8"
 #endif
+/* a board id in the keeper's words, for the glass (0.3.9.3: the WRONG VERSION
+ * card, a board's own version offered by CHECK FOR UPDATES); NULL = unknown */
+static inline const char *pt_board_words(const char *id) {
+    if (!id) return NULL;
+    return !strcmp(id, "amoled18") ? "1.8 INCH" : !strcmp(id, "round175c") ? "1.75 ROUND" :
+           !strcmp(id, "watch206") ? "2.06 WATCH" : !strcmp(id, "square216") ? "2.16 SQUARE" : NULL;
+}
 #define PT_BOARD_MAGIC   "PTBOARD"             /* the image's board marker begins with these 8 bytes (with the NUL) */
 #define PT_BOARD_MARKER_OFFSET 0x120           /* ... at this offset in the app image: the image header (24) + the
                                                   first segment's header (8) + esp_app_desc_t (256) */

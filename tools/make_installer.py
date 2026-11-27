@@ -67,9 +67,17 @@ DIALOG_EDITS = [
     ('this._state=i&&this._installErase?"PROVISION":"DASHBOARD"', 1,
      'this._state=i&&(this._installErase||this._showsProvisionForm)?"PROVISION":"DASHBOARD"'),
     # a tank already on this version says so (the menu's update item is hidden for it by the
-    # dialog itself: the tank reports the manifest's own version string - director.c)
+    # dialog itself: the tank reports the manifest's own version string - director.c). Since
+    # 0.3.9.3 the tank's name carries its boards ("Pocket Tank|<the board it is>|<the board its
+    # version is for>"): only the part before the "|" is shown, and the page's overrides.wrongBoard
+    # (site/src/install) may say instead that this tank is another board than the one picked
     ('<div slot="headline">Connected to ${this._info.name}</div>', 1,
-     '<div slot="headline">${this._isSameVersion?"Your tank is up to date":"Connected to "+this._info.name}</div>'),
+     '<div slot="headline">${(this._ptWrong=this.overrides&&this.overrides.wrongBoard?this.overrides.wrongBoard(this._manifest,this._info):null)'
+     '?this._ptWrong[0]:this._isSameVersion?"Your tank is up to date":"Connected to "+String(this._info.name).split("|")[0]}</div>'),
+    # ... and then the install item gives way to what to do (0.3.9.3): nothing is installed on a
+    # board the tank says it is not
+    ('${this._isSameVersion?"":s`', 1,
+     '${this._ptWrong?s`<ew-list-item><div slot="supporting-text">${this._ptWrong[1]}</div></ew-list-item>`:this._isSameVersion?"":s`'),
     # the link the tank hands the page is the update log, not a device
     ('<div slot="headline">Visit Device</div>', 2, '<div slot="headline">See what\'s new</div>'),
     # a tank on this version got an "Erase User Data" item in the menu (an ERASING reinstall): this
@@ -85,7 +93,19 @@ DIALOG_EDITS = [
 ]
 
 
-def patch_dialog(vendor_dir):
+# ESP Web Tools 10.5.x (esptool-js 0.7: the ESP32-P4 rev v3.x - its new stub, GET_SECURITY_INFO detection, a reset
+# that sets DTR and RTS together; 10.4.0's esptool-js 0.6 could not install the Waveshare 10.1, 11-25). Its minified
+# bundle names the lit template tag `r`, not `s`, and the Improv client `e`, not `t`: the same edits, those names
+# swapped. Used by the crew big-screen page (make_crew_big.py); the public page keeps 10.4.0 until it is proven too.
+def dialog_edits(new_bundle=False):
+    if not new_bundle:
+        return DIALOG_EDITS
+    sw = lambda x: (x.replace('"":s`', '"":r`').replace('?s`', '?r`').replace('s`<ew-list-item>', 'r`<ew-list-item>')
+                     .replace('t.initialize(i)', 'e.initialize(i)'))
+    return [(sw(o), w, sw(n)) for o, w, n in DIALOG_EDITS]
+
+
+def patch_dialog(vendor_dir, new_bundle=False):
     """apply the never_erase edit to the copied install dialog bundle"""
     names = [n for n in os.listdir(vendor_dir) if n.startswith("install-dialog") and n.endswith(".js")]
     if len(names) != 1:
@@ -97,7 +117,7 @@ def patch_dialog(vendor_dir):
         sys.exit(f"{path}: the erase click handler occurs {n} times, expected 2 - ESP Web Tools "
                  "changed; re-check the never_erase patch before shipping the installer")
     js = js.replace(DIALOG_ERASE_CLICK, DIALOG_NEVER_ERASE)
-    for old, want, new in DIALOG_EDITS:
+    for old, want, new in dialog_edits(new_bundle):
         if js.count(old) != want:
             sys.exit(f"{path}: {old[:60]!r} occurs {js.count(old)} times, expected {want} - ESP Web Tools "
                      "changed; re-check the dialog edits before shipping the installer")

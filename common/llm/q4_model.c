@@ -214,6 +214,155 @@ static inline int32_t dot_q4pk_64(const uint8_t *wp, const int8_t *x) {
     return acc;
 }
 #define Q4_PK 1
+#elif defined(CONFIG_IDF_TARGET_ESP32P4) && !defined(POCKET_TANK_NO_PIE)
+/* The ESP32-P4's HP cores carry the same 128-bit PIE unit on RISC-V (2026-10-12,
+ * the home tank): the S3's kernels with the P4's mnemonics - esp.vld.128.ip,
+ * esp.vmulas.s8.xacc (16 int8 MACs into the 40-bit XACC), esp.movx.r.xacc.l
+ * (its low word; a group dot is well inside 32 bits). Scalar on RISC-V the
+ * same decision took 14.9 s. The packed-nibble kernel is not ported yet
+ * (Q4_PK 0: a group is unpacked once, as on the batched path).
+ * These instructions take only x8-x15 and x24-x31 as their address and
+ * destination registers (s0, s1, a0-a5, s8-s11, t3-t6) - a set no compiler
+ * constraint names - so every operand is pinned to a0..a5 by hand and the
+ * accumulator is read through a5. The packed-nibble kernel (below) is the
+ * S3's too: esp.src.q funnels the 8-byte-aligned weights into place
+ * (SAR_BYTE by esp.movx.w.sar.bytes), esp.andq masks the low nibbles,
+ * esp.vsr.u32 (SAR 4 by esp.movx.w.sar) brings the high ones down, and a
+ * plain esp.vsub.s8 takes the 8 off (0..15 - 8 cannot overflow; the P4 has
+ * no saturating byte subtract). */
+#define Q4_PIE 1
+#define Q4_PK 1
+static inline int32_t dot_i8_64(const int8_t *w, const int8_t *x) {
+    register const int8_t *rw asm("a0") = w;
+    register const int8_t *rx asm("a1") = x;
+    register int32_t acc asm("a2");
+    __asm__ volatile(
+        "esp.zero.xacc\n"
+        "esp.vld.128.ip q0, %[w], 16\n"
+        "esp.vld.128.ip q1, %[x], 16\n"
+        "esp.vld.128.ip q2, %[w], 16\n"
+        "esp.vld.128.ip q3, %[x], 16\n"
+        "esp.vmulas.s8.xacc q0, q1\n"
+        "esp.vld.128.ip q0, %[w], 16\n"
+        "esp.vld.128.ip q1, %[x], 16\n"
+        "esp.vmulas.s8.xacc q2, q3\n"
+        "esp.vld.128.ip q2, %[w], 16\n"
+        "esp.vld.128.ip q3, %[x], 16\n"
+        "esp.vmulas.s8.xacc q0, q1\n"
+        "esp.vmulas.s8.xacc q2, q3\n"
+        "esp.movx.r.xacc.l %[acc]\n"
+        : [acc] "=r"(acc), [w] "+r"(rw), [x] "+r"(rx)
+        :
+        : "memory");
+    return acc;
+}
+/* one activation row against the group in q0-q3; the result lands in a5 */
+#define P4_DOT_ROW(X) \
+        "esp.zero.xacc\n" \
+        "esp.vld.128.ip q4, %[" X "], 16\n" \
+        "esp.vmulas.s8.xacc.ld.ip q5, %[" X "], 16, q0, q4\n" \
+        "esp.vmulas.s8.xacc.ld.ip q4, %[" X "], 16, q1, q5\n" \
+        "esp.vmulas.s8.xacc.ld.ip q5, %[" X "], 16, q2, q4\n" \
+        "esp.vmulas.s8.xacc q3, q5\n" \
+        "esp.movx.r.xacc.l a5\n"
+/* four tokens against one weight group: the group loads into q0-q3 once and
+ * stays there for all four activation rows (stride apart) */
+static inline void dot4_i8_64(const int8_t *w, const int8_t *x0, int stride, int32_t iv[4]) {
+    register const int8_t *rw asm("a0") = w;
+    register const int8_t *r0 asm("a1") = x0;
+    register const int8_t *r1 asm("a2") = x0 + stride;
+    register const int8_t *r2 asm("a3") = x0 + 2 * stride;
+    register const int8_t *r3 asm("a4") = x0 + 3 * stride;
+    int32_t a0, a1, a2, a3;
+    __asm__ volatile(
+        "esp.vld.128.ip q0, %[w], 16\n"
+        "esp.vld.128.ip q1, %[w], 16\n"
+        "esp.vld.128.ip q2, %[w], 16\n"
+        "esp.vld.128.ip q3, %[w], 16\n"
+        P4_DOT_ROW("x0") "mv %[a0], a5\n"
+        P4_DOT_ROW("x1") "mv %[a1], a5\n"
+        P4_DOT_ROW("x2") "mv %[a2], a5\n"
+        P4_DOT_ROW("x3") "mv %[a3], a5\n"
+        : [a0] "=&r"(a0), [a1] "=&r"(a1), [a2] "=&r"(a2), [a3] "=&r"(a3),
+          [w] "+r"(rw), [x0] "+r"(r0), [x1] "+r"(r1), [x2] "+r"(r2), [x3] "+r"(r3)
+        :
+        : "memory", "a5");
+    iv[0] = a0; iv[1] = a1; iv[2] = a2; iv[3] = a3;
+}
+/* eight tokens per weight-group load: the four activation pointers each hop
+ * (4*stride - 64) after their first pass to cover tokens t+4..t+7 */
+static inline void dot8_i8_64(const int8_t *w, const int8_t *x0, int stride, int32_t iv[8]) {
+    register const int8_t *rw asm("a0") = w;
+    register const int8_t *r0 asm("a1") = x0;
+    register const int8_t *r1 asm("a2") = x0 + stride;
+    register const int8_t *r2 asm("a3") = x0 + 2 * stride;
+    register const int8_t *r3 asm("a4") = x0 + 3 * stride;
+    int hop = 4 * stride - 64;
+    int32_t a0, a1, a2, a3, b0, b1, b2, b3;
+    __asm__ volatile(
+        "esp.vld.128.ip q0, %[w], 16\n"
+        "esp.vld.128.ip q1, %[w], 16\n"
+        "esp.vld.128.ip q2, %[w], 16\n"
+        "esp.vld.128.ip q3, %[w], 16\n"
+        P4_DOT_ROW("x0") "mv %[a0], a5\n" "add %[x0], %[x0], %[hop]\n"
+        P4_DOT_ROW("x1") "mv %[a1], a5\n" "add %[x1], %[x1], %[hop]\n"
+        P4_DOT_ROW("x2") "mv %[a2], a5\n" "add %[x2], %[x2], %[hop]\n"
+        P4_DOT_ROW("x3") "mv %[a3], a5\n" "add %[x3], %[x3], %[hop]\n"
+        P4_DOT_ROW("x0") "mv %[b0], a5\n"
+        P4_DOT_ROW("x1") "mv %[b1], a5\n"
+        P4_DOT_ROW("x2") "mv %[b2], a5\n"
+        P4_DOT_ROW("x3") "mv %[b3], a5\n"
+        : [a0] "=&r"(a0), [a1] "=&r"(a1), [a2] "=&r"(a2), [a3] "=&r"(a3),
+          [b0] "=&r"(b0), [b1] "=&r"(b1), [b2] "=&r"(b2), [b3] "=&r"(b3),
+          [w] "+r"(rw), [x0] "+r"(r0), [x1] "+r"(r1), [x2] "+r"(r2), [x3] "+r"(r3)
+        : [hop] "r"(hop)
+        : "memory", "a5");
+    iv[0] = a0; iv[1] = a1; iv[2] = a2; iv[3] = a3;
+    iv[4] = b0; iv[5] = b1; iv[6] = b2; iv[7] = b3;
+}
+static const int8_t q4pk_mask[16] __attribute__((aligned(16))) =
+    { 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15 };
+static const int8_t q4pk_eight[16] __attribute__((aligned(16))) =
+    { 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8 };
+static inline int32_t dot_q4pk_64(const uint8_t *wp, const int8_t *x) {
+    register const uint8_t *wa asm("a0") = (const uint8_t *)((uintptr_t)wp & ~(uintptr_t)15);
+    register const int8_t *rx asm("a1") = x;
+    register const int8_t *mask asm("a2") = q4pk_mask;
+    register const int8_t *eight asm("a3") = q4pk_eight;
+    register uint32_t shift asm("a4") = (uint32_t)((uintptr_t)wp & 15);
+    register uint32_t four asm("a5") = 4;         /* the SAR, then (a5 is free) the accumulator's low word */
+    __asm__ volatile(
+        "esp.movx.w.sar %[four]\n"
+        "esp.movx.w.sar.bytes %[sh]\n"
+        "esp.vld.128.ip q6, %[mask], 0\n"
+        "esp.vld.128.ip q7, %[eight], 0\n"
+        "esp.vld.128.ip q0, %[w], 16\n"
+        "esp.vld.128.ip q1, %[w], 16\n"
+        "esp.vld.128.ip q2, %[w], 0\n"
+        "esp.src.q q0, q0, q1\n"
+        "esp.src.q q1, q1, q2\n"
+        "esp.andq q2, q0, q6\n"
+        "esp.andq q3, q1, q6\n"
+        "esp.vsub.s8 q2, q2, q7\n"
+        "esp.vsub.s8 q3, q3, q7\n"
+        "esp.vsr.u32 q4, q0\n"
+        "esp.vsr.u32 q5, q1\n"
+        "esp.andq q4, q4, q6\n"
+        "esp.andq q5, q5, q6\n"
+        "esp.vsub.s8 q4, q4, q7\n"
+        "esp.vsub.s8 q5, q5, q7\n"
+        "esp.zero.xacc\n"
+        "esp.vld.128.ip q0, %[x], 16\n"
+        "esp.vmulas.s8.xacc.ld.ip q1, %[x], 16, q2, q0\n"
+        "esp.vmulas.s8.xacc.ld.ip q0, %[x], 16, q3, q1\n"
+        "esp.vmulas.s8.xacc.ld.ip q1, %[x], 16, q4, q0\n"
+        "esp.vmulas.s8.xacc q5, q1\n"
+        "esp.movx.r.xacc.l %[four]\n"
+        : [four] "+r"(four), [w] "+r"(wa), [x] "+r"(rx), [mask] "+r"(mask), [eight] "+r"(eight)
+        : [sh] "r"(shift)
+        : "memory");
+    return (int32_t)four;
+}
 #else
 #define Q4_PK 0
 #define Q4_PIE 0
@@ -255,7 +404,7 @@ struct q4_model {
     float *x, *xb, *xb2, *hb, *hb2, *q, *att, *logits, *key_cache, *value_cache;
     qact_t xq, hq;
     /* batched-prefill state (allocated on first use): per-token activations */
-    int    bmax;
+    int    bmax, bfail;                     /* the batch's size, and the size whose allocation failed (0 none) */
     float *bx, *bxb, *bq, *bhb, *bhb2;      /* [bmax][dim] / [bmax][hidden] */
     int8_t *bxq_q; float *bxq_s;            /* [bmax][dim], [bmax][dim/gs] */
     int8_t *bhq_q; float *bhq_s;            /* [bmax][hidden], [bmax][hidden/gs] */
@@ -596,8 +745,19 @@ static void matmul_batch(float *out, const int8_t *xq, const float *xs, int n_to
             int in = (i0 + ii) * n;
             for (int t = 0; t < n_tok; t++) acc[t] = 0;
             for (int g = 0; g < ngroups; g++) {
-                unpack_group(wg, w->q + ((in + g * gs) >> 1), gs);
                 float ws = half_to_float(w->s[(in + g * gs) / gs]);
+#if Q4_PK
+                if (n_tok < 4) {                  /* a small batch (THE TWO-PASS DECISION's [goal, " urgency"]): the packed
+                                                     kernel per token on the group as it lies in flash - fetched once, never
+                                                     unpacked (measured 2026-10-31: the unpack made a 2-token pass cost MORE
+                                                     than two forwards, 860 ms against 2 x 430 on the 1.8) */
+                    const uint8_t *wp = w->q + ((in + g * gs) >> 1);
+                    for (int t = 0; t < n_tok; t++)
+                        acc[t] += (float)dot_q4pk_64(wp, xq + t * n + g * gs) * ws * xs[t * sg + g];
+                    continue;
+                }
+#endif
+                unpack_group(wg, w->q + ((in + g * gs) >> 1), gs);
                 const int8_t *x = xq + g * gs;
                 int t = 0;
 #if Q4_PIE
@@ -624,27 +784,44 @@ static void matmul_batch(float *out, const int8_t *xq, const float *xs, int n_to
     }
 }
 
+/* the batch buffers for n tokens: all of them, or the old ones kept (0.4, the 11-02 evening sweep: bmax was set before
+ * the allocations, so one that failed left NULL buffers the next call of that size trusted). The allocators have no
+ * free, so the batch is sized to grow at most once: Q4_BATCH_FIRST tokens first (the size the boot bench reserved
+ * until 0.4 - every prompt fit it; with the bench gone, growing a token at a time leaked a set per new longest prompt,
+ * 555 KB of PSRAM in two decisions on the square), then the longest a prompt can be. A size that failed once is not
+ * asked again (bfail), and what it did get stays spent */
+#define Q4_BATCH_FIRST 44
 static bool ensure_batch(q4_model_t *m, int n) {
     if (m->bmax >= n) return true;
+    if (n < Q4_BATCH_FIRST && !m->bmax) n = Q4_BATCH_FIRST;
+    else if (m->bmax && n < m->c.seq_len - 1) n = m->c.seq_len - 1;
+    if (m->bfail && n >= m->bfail) return false;
     const q4_config_t *c = &m->c; int gs = m->gs;
+    float *bx = m->alloc((size_t)n * c->dim * 4), *bxb = m->alloc((size_t)n * c->dim * 4), *bq = m->alloc((size_t)n * c->dim * 4);
+    float *bhb = m->alloc((size_t)n * c->hidden_dim * 4), *bhb2 = m->alloc((size_t)n * c->hidden_dim * 4);
+    /* ONE quantized-activation buffer for both (RAM move 2, 0.4.2): bxq (the layer input, [n][dim]) is last read by the
+       FFN's w1 / w3 matmuls, and only after both is bhq ([n][hidden]) written for w2; the next layer writes bxq anew.
+       So bxq lives in bhq's (larger) memory: ~18 KB of internal RAM at 44 tokens, the same bits out (host_test/prefill_hash) */
+    size_t qa_q = (size_t)n * (c->hidden_dim > c->dim ? c->hidden_dim : c->dim), qa_s = (size_t)n * ((c->hidden_dim > c->dim ? c->hidden_dim : c->dim) / gs) * 4;
+    int8_t *bhq_q = alloc16_fast(m, qa_q); float *bhq_s = alloc16_fast(m, qa_s);
+    int8_t *bxq_q = bhq_q; float *bxq_s = bhq_s;
+    float *btile = alloc16_fast(m, (size_t)n * Q4_TILE_D * 4);
+    if (!(bx && bxb && bq && bhb && bhb2 && bxq_q && bxq_s && bhq_q && bhq_s && btile)) { m->bfail = n; return false; }
+    m->bx = bx; m->bxb = bxb; m->bq = bq; m->bhb = bhb; m->bhb2 = bhb2;
+    m->bxq_q = bxq_q; m->bxq_s = bxq_s; m->bhq_q = bhq_q; m->bhq_s = bhq_s; m->btile = btile;
     m->bmax = n;
-    m->bx   = m->alloc((size_t)n * c->dim * 4);
-    m->bxb  = m->alloc((size_t)n * c->dim * 4);
-    m->bq   = m->alloc((size_t)n * c->dim * 4);
-    m->bhb  = m->alloc((size_t)n * c->hidden_dim * 4);
-    m->bhb2 = m->alloc((size_t)n * c->hidden_dim * 4);
-    m->bxq_q = alloc16_fast(m, (size_t)n * c->dim); m->bxq_s = alloc16_fast(m, (size_t)n * (c->dim / gs) * 4);
-    m->bhq_q = alloc16_fast(m, (size_t)n * c->hidden_dim); m->bhq_s = alloc16_fast(m, (size_t)n * (c->hidden_dim / gs) * 4);
-    m->btile = alloc16_fast(m, (size_t)n * Q4_TILE_D * 4);
-    return m->bx && m->bxb && m->bq && m->bhb && m->bhb2 && m->bxq_q && m->bxq_s && m->bhq_q && m->bhq_s && m->btile;
+    return true;
 }
 
-float *q4_model_prefill(q4_model_t *m, const int *toks, int n) {
+/* the batched pass, from position pos0: the prompt's prefill is pos0 = 0; THE TWO-PASS
+ * DECISION (2026-10-31) continues at pos0 = the prompt's length with the goal and the
+ * tokens known to follow it, attending over the cache below them */
+static float *prefill_at(q4_model_t *m, const int *toks, int n, int pos0) {
     if (!m || !toks) return NULL;
     const q4_config_t *c = &m->c; int gs = m->gs;
     int dim = c->dim, kv_dim = (dim / c->n_heads) * c->n_kv_heads, kv_mul = c->n_heads / c->n_kv_heads;
     int hidden = c->hidden_dim, head_size = dim / c->n_heads;
-    if (n <= 0 || n > c->seq_len - 1 || !ensure_batch(m, n)) return NULL;
+    if (n <= 0 || pos0 < 0 || pos0 + n > c->seq_len - 1 || !ensure_batch(m, n)) return NULL;
     for (int t = 0; t < n; t++) if (toks[t] < 0 || toks[t] >= c->vocab_size) return NULL;
     /* embeddings */
     for (int t = 0; t < n; t++)
@@ -657,6 +834,7 @@ float *q4_model_prefill(q4_model_t *m, const int *toks, int n) {
     int64_t p0 = QPROF_MARK();
     for (int l = 0; l < c->n_layers; l++) {
         int loff = l * c->seq_len * kv_dim;
+        float *kc = m->key_cache + loff + pos0 * kv_dim, *vc = m->value_cache + loff + pos0 * kv_dim;   /* this batch's cache rows */
         for (int t = 0; t < n; t++) {
             rmsnorm(m->bxb + t * dim, m->bx + t * dim, m->rms_att + l * dim, dim);
             qa.q = m->bxq_q + t * dim; qa.s = m->bxq_s + t * (dim / gs);
@@ -666,14 +844,14 @@ float *q4_model_prefill(q4_model_t *m, const int *toks, int n) {
         /* q for all tokens; k,v straight into the cache rows */
         matmul_batch(m->bq, m->bxq_q, m->bxq_s, n, &m->wq[l], dim, dim, gs, m->btile);
         /* k/v: out must be contiguous per token at stride d=kv_dim -> cache rows are exactly that */
-        matmul_batch(m->key_cache + loff,   m->bxq_q, m->bxq_s, n, &m->wk[l], dim, kv_dim, gs, m->btile);
-        matmul_batch(m->value_cache + loff, m->bxq_q, m->bxq_s, n, &m->wv[l], dim, kv_dim, gs, m->btile);
+        matmul_batch(kc, m->bxq_q, m->bxq_s, n, &m->wk[l], dim, kv_dim, gs, m->btile);
+        matmul_batch(vc, m->bxq_q, m->bxq_s, n, &m->wv[l], dim, kv_dim, gs, m->btile);
         QPROF_ADD(0, p0);
         for (int t = 0; t < n; t++) {
-            float *q = m->bq + t * dim, *k = m->key_cache + loff + t * kv_dim;
+            float *q = m->bq + t * dim, *k = kc + t * kv_dim;
             for (int i = 0; i < dim; i += 2) {
                 int hd = i % head_size;
-                const float *cs = m->rope_cs + ((size_t)t * (head_size / 2) + hd / 2) * 2;
+                const float *cs = m->rope_cs + ((size_t)(pos0 + t) * (head_size / 2) + hd / 2) * 2;
                 float fcr = cs[0], fci = cs[1];
                 int rotn = i < kv_dim ? 2 : 1;
                 for (int vv = 0; vv < rotn; vv++) {
@@ -683,17 +861,18 @@ float *q4_model_prefill(q4_model_t *m, const int *toks, int n) {
                 }
             }
             QPROF_ADD(3, p0);
-            /* causal attention for token t */
+            /* causal attention for token t: over the cache below it, this batch's rows included */
+            const int last = pos0 + t;
             for (int h = 0; h < c->n_heads; h++) {
                 float *qh = q + h * head_size, *att = m->att + h * c->seq_len;
-                for (int p = 0; p <= t; p++) {
+                for (int p = 0; p <= last; p++) {
                     float *kk = m->key_cache + loff + p * kv_dim + (h / kv_mul) * head_size, sc = 0;
                     for (int i = 0; i < head_size; i++) sc += qh[i] * kk[i];
                     att[p] = sc / sqrtf((float)head_size);
                 }
-                softmax(att, t + 1);
+                softmax(att, last + 1);
                 float *xb = m->bxb + t * dim + h * head_size; memset(xb, 0, head_size * 4);
-                for (int p = 0; p <= t; p++) {
+                for (int p = 0; p <= last; p++) {
                     float *vv = m->value_cache + loff + p * kv_dim + (h / kv_mul) * head_size, a = att[p];
                     for (int i = 0; i < head_size; i++) xb[i] += a * vv[i];
                 }
@@ -733,6 +912,8 @@ float *q4_model_prefill(q4_model_t *m, const int *toks, int n) {
     matmul(m->logits, &m->xq, &m->wcls, dim, c->vocab_size, gs);
     return m->logits;
 }
+float *q4_model_prefill(q4_model_t *m, const int *toks, int n) { return prefill_at(m, toks, n, 0); }
+float *q4_model_prefill_at(q4_model_t *m, const int *toks, int n, int pos0) { return prefill_at(m, toks, n, pos0); }
 
 int64_t q4_model_bench(q4_model_t *m, int which, int n_tok, int64_t (*clock_us)(void)) {
     const q4_config_t *c = &m->c; int gs = m->gs;
@@ -798,8 +979,21 @@ int q4_model_generate(q4_model_t *m, const int *prompt, int n_prompt, int *out, 
 int q4_model_decide(q4_model_t *m, const int *prompt, int n_prompt,
                     const int *cand, int n_cand, float temp, uint32_t *rng,
                     float *probs_out, int *out, int max_out) {
+    return q4_model_decide_follow(m, prompt, n_prompt, cand, n_cand, temp, rng, probs_out, out, max_out, NULL, 0);
+}
+/* THE TWO-PASS DECISION (2026-10-31): a decision was the prompt's batched prefill (one pass
+ * over the weights) and then a forward per generated token - the goal, the literal " urgency",
+ * the digit: three passes. The middle token is known before it is generated, so the pick
+ * and the tokens known to follow it go as ONE batched pass (prefill_at), and the next token
+ * is read from its logits: two passes. Without follow tokens, or when the batch has no
+ * memory, the token-by-token path as before. */
+int q4_model_decide_follow(q4_model_t *m, const int *prompt, int n_prompt,
+                    const int *cand, int n_cand, float temp, uint32_t *rng,
+                    float *probs_out, int *out, int max_out,
+                    const int *follow, int n_follow) {
     if (!out || max_out < 0 || !token_ids_valid(m, prompt, n_prompt) ||
         !token_ids_valid(m, cand, n_cand)) return 0;
+    if (n_follow > 0 && !token_ids_valid(m, follow, n_follow)) return 0;
     int n = 0;
     float *logits = q4_model_prefill(m, prompt, n_prompt);
     if (!logits) for (int p = 0; p < n_prompt; p++) {
@@ -820,6 +1014,16 @@ int q4_model_decide(q4_model_t *m, const int *prompt, int n_prompt,
         for (int i = 0; i < n_cand; i++) { acc += p[i]; if (r < acc) { pick = i; break; } pick = i; }
     } else for (int i = 1; i < n_cand; i++) if (p[i] > p[pick]) pick = i;
     int pos = n_prompt - 1, token = cand[pick];
+    if (n_follow > 0 && n_follow <= 6 && n_follow + 1 < max_out && n_prompt + 1 + n_follow <= m->c.seq_len - 1) {
+        int cont[8]; cont[0] = token;
+        for (int i = 0; i < n_follow; i++) cont[1 + i] = follow[i];
+        float *lg = prefill_at(m, cont, 1 + n_follow, n_prompt);   /* the pick and its followers: one pass */
+        if (lg) {
+            for (int i = 0; i <= n_follow; i++) out[n++] = cont[i];
+            pos = n_prompt + n_follow;                               /* the last follower's position */
+            token = argmax(lg, m->c.vocab_size);                     /* ... and the token after it */
+        }
+    }
     while (token != 1 && n < max_out) {
         out[n++] = token;
         if (n >= max_out) break;              /* don't pay a forward for tokens we won't keep */

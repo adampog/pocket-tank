@@ -14,6 +14,10 @@ BOARDS = [
     ("amoled18",  "Waveshare ESP32-S3-Touch-AMOLED-1.8",  None),
     ("round175c", "Waveshare ESP32-S3-Touch-AMOLED-1.75C", "sdkconfig.round"),
     ("watch206",  "Waveshare ESP32-S3-Touch-AMOLED-2.06",  "sdkconfig.watch"),
+    ("square216", "Waveshare ESP32-S3-Touch-AMOLED-2.16",  "sdkconfig.square"),
+    # this fork's two 320 x 240 boards (the rectangle's world, scaled down by the display port)
+    ("cyd28",     "ESP32-S3 CYD 2.8 (ES3C28P)",            "sdkconfig.cyd"),
+    ("tlcd2",     "Waveshare ESP32-S3-Touch-LCD-2",        "sdkconfig.tlcd2"),
 ]
 IDS = [b[0] for b in BOARDS]
 MAGIC = b"PTBOARD\0"

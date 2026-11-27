@@ -48,6 +48,14 @@ static bool hex_to_bytes(const char *hex, uint8_t *out, size_t n) {
     return true;
 }
 
+/* every model body we ever shipped (the public repo's model/out/model_q4.bin):
+   a tank still on an older one runs fine and is not "damaged" */
+static const char *const SHIPPED[] = {
+    "b200bf87c78dc85c4d727f68941ac0b83cced9827037cc169cd2122d71002c2a",   /* v3m, the launch (2026-09-11 .. 09-15) */
+    PT_MODEL_SHA256,                                                      /* today's */
+};
+static bool s_unknown;
+bool model_trailer_unknown_body(void) { return s_unknown; }
 bool model_trailer_check(const esp_partition_t *mp, const void *map) {
     model_trailer_t t;
     if (model_trailer_read(mp, &t)) {
@@ -67,6 +75,9 @@ bool model_trailer_check(const esp_partition_t *mp, const void *map) {
         ESP_LOGI(TAG, "the body is %s: trailer %s", PT_MODEL_TAG, ok ? "written" : "NOT written");
         return ok;
     }
-    ESP_LOGW(TAG, "the body is not %s (sha256 %.16s...): running it as it is, no trailer", PT_MODEL_TAG, hex);
+    ESP_LOGW(TAG, "the body is not %s (sha256 %.16s...): running it as it is, no trailer", PT_MODEL_TAG, hex);   /* (the tank check reads this line) */
+    s_unknown = true;
+    for (size_t i = 0; i < sizeof SHIPPED / sizeof SHIPPED[0]; i++) if (!strcmp(hex, SHIPPED[i])) s_unknown = false;
+    ESP_LOGW(TAG, "%s", s_unknown ? "the body is no model we ever shipped: damaged (the keeper is told)" : "the body is an older model we shipped: it runs");
     return false;
 }
